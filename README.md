@@ -142,16 +142,3 @@ The Flask backend is a thin wrapper — it imports `pipeline.py` and exposes it 
 - **Frontend:** HTML, CSS, JavaScript
 
 ---
-
-## Status
-
-| Module | Status |
-|---|---|
-| `preprocessor.py` | ✅ Complete |
-| `models.py` | 🔲 In progress |
-| `metrics.py` | 🔲 In progress |
-| `recommender.py` | 🔲 In progress |
-| `visualize.py` | 🔲 In progress |
-| `pipeline.py` | 🔲 In progress |
-| `app.py` | 🔲 In progress |
-| `frontend/` | 🔲 In progress |
