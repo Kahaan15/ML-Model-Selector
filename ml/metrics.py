@@ -32,6 +32,7 @@ from sklearn.metrics import (
     f1_score,
     precision_score,
     recall_score,
+    confusion_matrix as sk_confusion_matrix,
 )
 
 
@@ -57,6 +58,152 @@ UNDERFIT_ACC_THRESHOLD = 0.50
 # ─────────────────────────────────────────────
 # PUBLIC API
 # ─────────────────────────────────────────────
+def compute_baseline(result) -> dict:
+    """
+    Compute a naive baseline for comparison.
+
+    Classification: majority-class predictor
+        → accuracy = fraction of majority class
+        → F1 = weighted F1 predicting majority class for all rows
+
+    Regression: mean-value predictor
+        → R² = 0 by definition (predicting mean gives R²=0)
+        → RMSE = std of y_test
+
+    Returns
+    -------
+    dict with keys depending on task type.
+    """
+    if result.task_type == "regression":
+        y_test = result.y_test
+        mean_pred = np.full_like(y_test, float(np.mean(result.y_train)), dtype=float)
+        rmse = float(np.sqrt(mean_squared_error(y_test, mean_pred)))
+        return {
+            "strategy": "Mean Prediction",
+            "test_r2": 0.0,
+            "test_rmse": round(rmse, 4),
+            "description": "Predicts the training mean for every sample",
+        }
+    else:
+        y_test = result.y_test
+        # Majority class in training set
+        unique, counts = np.unique(result.y_train, return_counts=True)
+        majority_class = unique[np.argmax(counts)]
+        majority_frac = round(float(counts.max() / counts.sum()), 4)
+        majority_pred = np.full_like(y_test, majority_class)
+
+        baseline_acc = round(float(accuracy_score(y_test, majority_pred)), 4)
+        baseline_f1 = round(float(f1_score(y_test, majority_pred, average="weighted", zero_division=0)), 4)
+
+        return {
+            "strategy": "Majority Class",
+            "majority_class": str(majority_class),
+            "majority_fraction": majority_frac,
+            "test_accuracy": baseline_acc,
+            "test_f1": baseline_f1,
+            "description": f"{majority_frac*100:.0f}% of samples belong to class '{majority_class}'",
+        }
+
+
+def compute_cm_stats(best_model, result) -> dict:
+    """
+    Compute confusion matrix insights for the best classification model.
+
+    Returns a dict with:
+      - cm : list[list[int]]           — raw confusion matrix
+      - class_labels : list[str]       — display labels
+      - is_binary : bool
+      - For binary: tn, fp, fn, tp, sensitivity, specificity, dominant_error
+      - For all:    per_class_accuracy : list[{label, correct, total, pct}]
+      - insights : list[str]           — ready-to-display sentences
+    """
+    if result.task_type != "classification" or best_model is None:
+        return {}
+
+    y_test = result.y_test
+    y_pred = best_model.predict(result.X_test)
+    cm = sk_confusion_matrix(y_test, y_pred)
+
+    labels = [str(c) for c in (result.class_labels or sorted(set(y_test)))]
+    is_binary = cm.shape[0] == 2
+
+    # Per-class accuracy (recall per class)
+    per_class = []
+    for i, lbl in enumerate(labels):
+        total = int(cm[i].sum())
+        correct = int(cm[i, i])
+        pct = round(correct / total * 100, 1) if total > 0 else 0.0
+        per_class.append({"label": lbl, "correct": correct, "total": total, "pct": pct})
+
+    insights = []
+
+    if is_binary:
+        tn, fp, fn, tp = int(cm[0, 0]), int(cm[0, 1]), int(cm[1, 0]), int(cm[1, 1])
+        sensitivity = round(tp / (tp + fn) * 100, 1) if (tp + fn) > 0 else 0.0
+        specificity = round(tn / (tn + fp) * 100, 1) if (tn + fp) > 0 else 0.0
+
+        # Human-readable class names
+        neg_label = labels[0]
+        pos_label = labels[1]
+
+        insights.append(
+            f"Correctly identified {tn}/{tn+fp} '{neg_label}' cases "
+            f"(specificity: {specificity}%)"
+        )
+        insights.append(
+            f"Correctly identified {tp}/{tp+fn} '{pos_label}' cases "
+            f"(sensitivity / recall: {sensitivity}%)"
+        )
+
+        if fp > fn:
+            insights.append(
+                f"Dominant error: {fp} false positives — predicted '{pos_label}' "
+                f"when the true label was '{neg_label}' (model leans toward '{pos_label}')"
+            )
+        elif fn > fp:
+            insights.append(
+                f"Dominant error: {fn} false negatives — predicted '{neg_label}' "
+                f"when the true label was '{pos_label}' (model misses some '{pos_label}' cases)"
+            )
+        else:
+            insights.append("False positives and false negatives are balanced — no strong prediction bias")
+
+        return {
+            "is_binary": True,
+            "cm": cm.tolist(),
+            "class_labels": labels,
+            "tn": tn, "fp": fp, "fn": fn, "tp": tp,
+            "sensitivity": sensitivity,
+            "specificity": specificity,
+            "per_class_accuracy": per_class,
+            "insights": insights,
+        }
+    else:
+        # Multiclass insights
+        best_class = max(per_class, key=lambda x: x["pct"])
+        worst_class = min(per_class, key=lambda x: x["pct"])
+
+        insights.append(
+            f"Best recognized class: '{best_class['label']}' "
+            f"({best_class['correct']}/{best_class['total']} correct, {best_class['pct']}%)"
+        )
+        insights.append(
+            f"Most confused class: '{worst_class['label']}' "
+            f"({worst_class['correct']}/{worst_class['total']} correct, {worst_class['pct']}%)"
+        )
+        insights.append(
+            "Off-diagonal cells show misclassification counts between class pairs"
+        )
+
+        return {
+            "is_binary": False,
+            "cm": cm.tolist(),
+            "class_labels": labels,
+            "per_class_accuracy": per_class,
+            "insights": insights,
+        }
+
+
 def compute_metrics(models: dict, result) -> pd.DataFrame:
     """
     Compute train and test metrics for every model.

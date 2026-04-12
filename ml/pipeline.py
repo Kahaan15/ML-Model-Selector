@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from preprocessor import preprocess
 from models import train_all_models
-from metrics import compute_metrics
+from metrics import compute_metrics, compute_baseline, compute_cm_stats
 from recommender import recommend
 from visualize import generate_charts
 
@@ -64,8 +64,15 @@ def run_pipeline(source, target_column=None, task_type=None) -> dict:
     # ── Step 3: Compute metrics ──────────────────────────────────────────────
     metrics_df = compute_metrics(models, result)
 
+    # ── Step 3b: Compute naive baseline ──────────────────────────────────────
+    baseline = compute_baseline(result)
+
     # ── Step 4: Recommend best model ─────────────────────────────────────────
     recommendation = recommend(metrics_df)
+
+    # ── Step 4b: Confusion matrix insights (classification only) ─────────────
+    best_model_obj = models.get(recommendation["best_model"])
+    cm_stats = compute_cm_stats(best_model_obj, result)
 
     # ── Step 5: Generate charts ──────────────────────────────────────────────
     charts = generate_charts(result, models, metrics_df, recommendation["best_model"])
@@ -74,6 +81,8 @@ def run_pipeline(source, target_column=None, task_type=None) -> dict:
     return {
         "preprocess_log": result.log,
         "metrics": metrics_df.to_dict(orient="records"),
+        "baseline": baseline,
+        "cm_stats": cm_stats,
         "recommendation": recommendation,
         "charts": charts,
         "dataset_info": {

@@ -258,9 +258,61 @@ async function runAnalysis() {
 
 function renderResults(data) {
     renderRecommendation(data.recommendation);
+    renderBaseline(data.baseline, data.metrics, data.dataset_info.task_type);
     renderMetricsTable(data.metrics, data.recommendation.best_model, data.dataset_info.task_type);
-    renderCharts(data.charts);
+    renderCharts(data.charts, data.cm_stats);
     renderLog(data.preprocess_log);
+}
+
+
+// ─── BASELINE CALLOUT ───────────────────────────────────────────────────────
+
+function renderBaseline(baseline, metrics, taskType) {
+    const container = document.getElementById("baseline-callout");
+    if (!container || !baseline) return;
+
+    let statHtml = "";
+    let beatCount = 0;
+    const total = metrics.length;
+
+    if (taskType === "regression") {
+        const baseRmse = baseline.test_rmse;
+        beatCount = metrics.filter(m => m.test_rmse < baseRmse).length;
+        statHtml = `
+            <span class="baseline-stat">Baseline RMSE: <strong>${baseRmse.toFixed(4)}</strong></span>
+            <span class="baseline-stat">Baseline R&sup2;: <strong>0.0000</strong></span>
+        `;
+    } else {
+        const baseAcc = baseline.test_accuracy;
+        const baseF1 = baseline.test_f1;
+        beatCount = metrics.filter(m => m.test_f1 > baseF1).length;
+        statHtml = `
+            <span class="baseline-stat">Strategy: <strong>${baseline.strategy}</strong></span>
+            <span class="baseline-stat">Baseline Acc: <strong>${baseAcc.toFixed(4)}</strong></span>
+            <span class="baseline-stat">Baseline F1: <strong>${baseF1.toFixed(4)}</strong></span>
+            <span class="baseline-stat" style="color:var(--text-muted);font-size:0.78rem;">${baseline.description}</span>
+        `;
+    }
+
+    const allBeat = beatCount === total;
+    const beatColor = allBeat ? "var(--green)" : "var(--yellow)";
+    const beatIcon = allBeat ? "✅" : "⚠️";
+
+    container.innerHTML = `
+        <div class="baseline-inner">
+            <div class="baseline-left">
+                <div class="baseline-title">📊 Naive Baseline</div>
+                <div class="baseline-stats">${statHtml}</div>
+            </div>
+            <div class="baseline-right">
+                <div class="baseline-beat" style="color:${beatColor}">
+                    ${beatIcon} ${beatCount}/${total} models beat the baseline
+                </div>
+                ${allBeat ? '<div class="baseline-note">All models outperform random prediction ✔</div>' : ''}
+            </div>
+        </div>
+    `;
+    container.style.display = "block";
 }
 
 
@@ -405,7 +457,7 @@ function sortTable(key) {
 
 // ─── CHARTS ─────────────────────────────────────────────────────────────────
 
-function renderCharts(charts) {
+function renderCharts(charts, cmStats) {
     chartsGrid.innerHTML = "";
 
     // Render in specified order, skip missing
@@ -423,9 +475,17 @@ function renderCharts(charts) {
 
         const friendlyName = CHART_NAMES[key] || key.replace(/_/g, " ");
 
+        // Build insight bullets for confusion matrix
+        let insightHtml = "";
+        if (key === "confusion_matrix" && cmStats && cmStats.insights && cmStats.insights.length > 0) {
+            const bullets = cmStats.insights.map(s => `<li>${escapeHtml(s)}</li>`).join("");
+            insightHtml = `<ul class="cm-insights">${bullets}</ul>`;
+        }
+
         card.innerHTML = `
             <img src="data:image/png;base64,${charts[key]}" alt="${friendlyName}" loading="lazy">
             <div class="chart-label">${friendlyName}</div>
+            ${insightHtml}
         `;
 
         chartsGrid.appendChild(card);

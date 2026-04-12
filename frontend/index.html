@@ -1,15 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="ML Bias-Variance Tradeoff Educational System — Upload any CSV, train multiple models, and visualize the bias-variance tradeoff.">
+    <meta name="description"
+        content="ML Bias-Variance Tradeoff Educational System — Upload any CSV, train multiple models, and visualize the bias-variance tradeoff.">
     <title>ML Bias-Variance Tradeoff Analyzer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
     <style>
         /* ─── CSS RESET & VARIABLES ─────────────────────────────── */
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
         :root {
             --bg-primary: #0a0a1a;
@@ -50,18 +59,25 @@
         body::before {
             content: '';
             position: fixed;
-            top: -50%; left: -50%;
-            width: 200%; height: 200%;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
             background: radial-gradient(ellipse at 20% 50%, rgba(233, 69, 96, 0.08) 0%, transparent 50%),
-                        radial-gradient(ellipse at 80% 20%, rgba(0, 210, 255, 0.06) 0%, transparent 50%),
-                        radial-gradient(ellipse at 50% 80%, rgba(0, 230, 118, 0.04) 0%, transparent 50%);
+                radial-gradient(ellipse at 80% 20%, rgba(0, 210, 255, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 80%, rgba(0, 230, 118, 0.04) 0%, transparent 50%);
             z-index: -1;
             animation: bgShift 20s ease-in-out infinite alternate;
         }
 
         @keyframes bgShift {
-            0% { transform: translate(0, 0); }
-            100% { transform: translate(-5%, -3%); }
+            0% {
+                transform: translate(0, 0);
+            }
+
+            100% {
+                transform: translate(-5%, -3%);
+            }
         }
 
         /* ─── LAYOUT ────────────────────────────────────────────── */
@@ -123,7 +139,8 @@
         }
 
         .card-title .icon {
-            width: 28px; height: 28px;
+            width: 28px;
+            height: 28px;
             border-radius: 8px;
             display: flex;
             align-items: center;
@@ -152,12 +169,14 @@
             transition: opacity var(--transition);
         }
 
-        .upload-zone:hover, .upload-zone.drag-over {
+        .upload-zone:hover,
+        .upload-zone.drag-over {
             border-color: var(--accent);
             transform: translateY(-2px);
         }
 
-        .upload-zone:hover::before, .upload-zone.drag-over::before {
+        .upload-zone:hover::before,
+        .upload-zone.drag-over::before {
             opacity: 1;
         }
 
@@ -219,7 +238,8 @@
             letter-spacing: 0.5px;
         }
 
-        select, input[type="text"] {
+        select,
+        input[type="text"] {
             background: var(--bg-secondary);
             border: 1px solid var(--glass-border);
             border-radius: var(--radius-sm);
@@ -241,7 +261,8 @@
             padding-right: 2rem;
         }
 
-        select:focus, input:focus {
+        select:focus,
+        input:focus {
             border-color: var(--accent);
         }
 
@@ -331,7 +352,8 @@
         }
 
         .spinner {
-            width: 48px; height: 48px;
+            width: 48px;
+            height: 48px;
             border: 3px solid var(--glass-border);
             border-top-color: var(--accent);
             border-radius: 50%;
@@ -339,7 +361,9 @@
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         .loading-text {
@@ -375,8 +399,10 @@
         .recommendation-card::before {
             content: '';
             position: absolute;
-            top: 0; right: 0;
-            width: 200px; height: 200px;
+            top: 0;
+            right: 0;
+            width: 200px;
+            height: 200px;
             background: radial-gradient(circle, rgba(233, 69, 96, 0.1), transparent 70%);
             pointer-events: none;
         }
@@ -438,8 +464,15 @@
             color: var(--accent);
         }
 
-        thead th.sorted-asc::after { content: ' ▲'; color: var(--accent); }
-        thead th.sorted-desc::after { content: ' ▼'; color: var(--accent); }
+        thead th.sorted-asc::after {
+            content: ' ▲';
+            color: var(--accent);
+        }
+
+        thead th.sorted-desc::after {
+            content: ' ▼';
+            color: var(--accent);
+        }
 
         tbody tr {
             border-bottom: 1px solid var(--glass-border);
@@ -469,9 +502,20 @@
             letter-spacing: 0.3px;
         }
 
-        .fit-good { background: var(--green-soft); color: var(--green); }
-        .fit-overfit { background: var(--accent-soft); color: var(--accent); }
-        .fit-underfit { background: var(--yellow-soft); color: var(--yellow); }
+        .fit-good {
+            background: var(--green-soft);
+            color: var(--green);
+        }
+
+        .fit-overfit {
+            background: var(--accent-soft);
+            color: var(--accent);
+        }
+
+        .fit-underfit {
+            background: var(--yellow-soft);
+            color: var(--yellow);
+        }
 
         /* ─── CHARTS GRID ───────────────────────────────────────── */
         .charts-grid {
@@ -511,6 +555,34 @@
             letter-spacing: 0.5px;
         }
 
+        .cm-insights {
+            list-style: none;
+            margin-top: 0.85rem;
+            padding: 0.75rem 1rem;
+            background: rgba(0, 210, 255, 0.05);
+            border: 1px solid rgba(0, 210, 255, 0.15);
+            border-radius: var(--radius-sm);
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+        }
+
+        .cm-insights li {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            padding-left: 1.2rem;
+            position: relative;
+            line-height: 1.5;
+        }
+
+        .cm-insights li::before {
+            content: '▸';
+            position: absolute;
+            left: 0;
+            color: var(--cyan);
+            font-size: 0.75rem;
+        }
+
         /* ─── PREPROCESS LOG ────────────────────────────────────── */
         .log-toggle {
             background: none;
@@ -526,7 +598,9 @@
             font-weight: 500;
         }
 
-        .log-toggle:hover { text-decoration: underline; }
+        .log-toggle:hover {
+            text-decoration: underline;
+        }
 
         .log-content {
             display: none;
@@ -541,11 +615,13 @@
             overflow-y: auto;
         }
 
-        .log-content.open { display: block; }
+        .log-content.open {
+            display: block;
+        }
 
         .log-line {
             padding: 0.15rem 0;
-            border-bottom: 1px solid rgba(255,255,255,0.03);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
         }
 
         /* ─── WARNINGS ──────────────────────────────────────────── */
@@ -588,38 +664,139 @@
 
         /* ─── ANIMATIONS ────────────────────────────────────────── */
         @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         @keyframes fadeInDown {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* ─── BASELINE CALLOUT ──────────────────────────────────── */
+        .baseline-callout {
+            display: none;
+            background: linear-gradient(135deg, rgba(0, 230, 118, 0.06), rgba(0, 210, 255, 0.05));
+            border: 1px solid rgba(0, 230, 118, 0.25);
+            border-radius: var(--radius);
+            padding: 1.1rem 1.5rem;
+            margin-bottom: 1.5rem;
+            backdrop-filter: blur(12px);
+        }
+
+        .baseline-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .baseline-title {
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--green);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .baseline-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .baseline-stat {
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.04);
+            padding: 0.25rem 0.6rem;
+            border-radius: 6px;
+            border: 1px solid var(--glass-border);
+        }
+
+        .baseline-stat strong {
+            color: var(--text-primary);
+        }
+
+        .baseline-beat {
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .baseline-note {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-top: 0.3rem;
         }
 
         /* ─── SCROLLBAR ─────────────────────────────────────────── */
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--text-muted);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-secondary);
+        }
 
         /* ─── RESPONSIVE ────────────────────────────────────────── */
         @media (max-width: 768px) {
-            .container { padding: 1rem; }
-            .header h1 { font-size: 1.6rem; }
-            .controls-row { grid-template-columns: 1fr; }
-            .charts-grid { grid-template-columns: 1fr; }
-            .summary-grid { grid-template-columns: repeat(2, 1fr); }
+            .container {
+                padding: 1rem;
+            }
+
+            .header h1 {
+                font-size: 1.6rem;
+            }
+
+            .controls-row {
+                grid-template-columns: 1fr;
+            }
+
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .summary-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
     </style>
 </head>
+
 <body>
 
     <!-- LOADING OVERLAY -->
     <div class="loading-overlay" id="loading-overlay">
         <div class="spinner"></div>
         <div class="loading-text">Training models...</div>
-        <div class="loading-subtext">Running all models and generating bias-variance charts. This may take a moment.</div>
+        <div class="loading-subtext">Running all models and generating bias-variance charts. This may take a moment.
+        </div>
     </div>
 
     <div class="container">
@@ -691,6 +868,9 @@
                 <div class="verdict-text" id="verdict-text"></div>
             </div>
 
+            <!-- BASELINE CALLOUT -->
+            <div class="baseline-callout" id="baseline-callout"></div>
+
             <!-- METRICS TABLE -->
             <h2 class="section-title">&#128202; Model Metrics</h2>
             <div class="card">
@@ -724,4 +904,5 @@
 
     <script src="charts.js"></script>
 </body>
+
 </html>
