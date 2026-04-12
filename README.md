@@ -1,6 +1,6 @@
 # ML Model Selector
 
-> Plug in any CSV — automatically trains 18+ ML models, compares bias-variance tradeoff, and recommends the best model with explanation.
+> Plug in any CSV — automatically trains 15+ ML models, compares bias-variance tradeoff, and recommends the best model with explanation.
 
 ---
 
