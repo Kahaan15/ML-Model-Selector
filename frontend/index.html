@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ML Bias-Variance Tradeoff Educational System — Upload any CSV, train multiple models, and visualize the bias-variance tradeoff.">
+    <title>ML Bias-Variance Tradeoff Analyzer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* ─── CSS RESET & VARIABLES ─────────────────────────────── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg-primary: #0a0a1a;
+            --bg-secondary: #111128;
+            --bg-card: rgba(22, 33, 62, 0.6);
+            --bg-card-hover: rgba(22, 33, 62, 0.85);
+            --border: rgba(233, 69, 96, 0.2);
+            --border-glow: rgba(233, 69, 96, 0.5);
+            --accent: #e94560;
+            --accent-soft: rgba(233, 69, 96, 0.15);
+            --cyan: #00d2ff;
+            --cyan-soft: rgba(0, 210, 255, 0.15);
+            --green: #00e676;
+            --green-soft: rgba(0, 230, 118, 0.15);
+            --yellow: #ffab00;
+            --yellow-soft: rgba(255, 171, 0, 0.15);
+            --text-primary: #eaeaea;
+            --text-secondary: #9a9abb;
+            --text-muted: #5a5a7a;
+            --glass-bg: rgba(16, 18, 40, 0.65);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --radius: 16px;
+            --radius-sm: 10px;
+            --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* ─── BACKGROUND GRADIENT ───────────────────────────────── */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%; left: -50%;
+            width: 200%; height: 200%;
+            background: radial-gradient(ellipse at 20% 50%, rgba(233, 69, 96, 0.08) 0%, transparent 50%),
+                        radial-gradient(ellipse at 80% 20%, rgba(0, 210, 255, 0.06) 0%, transparent 50%),
+                        radial-gradient(ellipse at 50% 80%, rgba(0, 230, 118, 0.04) 0%, transparent 50%);
+            z-index: -1;
+            animation: bgShift 20s ease-in-out infinite alternate;
+        }
+
+        @keyframes bgShift {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(-5%, -3%); }
+        }
+
+        /* ─── LAYOUT ────────────────────────────────────────────── */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem 4rem;
+        }
+
+        /* ─── HEADER ────────────────────────────────────────────── */
+        .header {
+            text-align: center;
+            padding: 3rem 0 2rem;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        .header h1 {
+            font-size: 2.4rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent), var(--cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.5px;
+            margin-bottom: 0.5rem;
+        }
+
+        .header p {
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+            font-weight: 300;
+        }
+
+        /* ─── GLASS CARD ────────────────────────────────────────── */
+        .card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 1.75rem;
+            margin-bottom: 1.5rem;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            box-shadow: var(--shadow);
+            transition: border-color var(--transition), transform var(--transition);
+            animation: fadeInUp 0.6s ease-out both;
+        }
+
+        .card:hover {
+            border-color: var(--border);
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-title .icon {
+            width: 28px; height: 28px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+        }
+
+        /* ─── UPLOAD ZONE ───────────────────────────────────────── */
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all var(--transition);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-zone::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: var(--accent-soft);
+            opacity: 0;
+            transition: opacity var(--transition);
+        }
+
+        .upload-zone:hover, .upload-zone.drag-over {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .upload-zone:hover::before, .upload-zone.drag-over::before {
+            opacity: 1;
+        }
+
+        .upload-icon {
+            font-size: 2.5rem;
+            margin-bottom: 0.75rem;
+            display: block;
+        }
+
+        .upload-zone h3 {
+            font-weight: 600;
+            margin-bottom: 0.3rem;
+            position: relative;
+        }
+
+        .upload-zone p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            position: relative;
+        }
+
+        .upload-zone input[type="file"] {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .file-info {
+            margin-top: 0.75rem;
+            padding: 0.5rem 1rem;
+            background: var(--cyan-soft);
+            border-radius: var(--radius-sm);
+            display: inline-block;
+            font-size: 0.85rem;
+            color: var(--cyan);
+            font-weight: 500;
+        }
+
+        /* ─── FORM CONTROLS ─────────────────────────────────────── */
+        .controls-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 1rem;
+            align-items: end;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .form-group label {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        select, input[type="text"] {
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            padding: 0.65rem 1rem;
+            font-size: 0.9rem;
+            font-family: inherit;
+            outline: none;
+            transition: border-color var(--transition);
+            width: 100%;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+
+        select {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239a9abb'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 2rem;
+        }
+
+        select:focus, input:focus {
+            border-color: var(--accent);
+        }
+
+        /* ─── BUTTONS ───────────────────────────────────────────── */
+        .btn {
+            padding: 0.7rem 2rem;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), #c0392b);
+            color: white;
+            box-shadow: 0 4px 15px rgba(233, 69, 96, 0.3);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(233, 69, 96, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ─── DATASET SUMMARY ───────────────────────────────────── */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+        }
+
+        .stat-item {
+            background: var(--bg-secondary);
+            border-radius: var(--radius-sm);
+            padding: 1rem;
+            text-align: center;
+            border: 1px solid var(--glass-border);
+            transition: transform var(--transition);
+        }
+
+        .stat-item:hover {
+            transform: translateY(-2px);
+        }
+
+        .stat-value {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--cyan);
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 0.25rem;
+        }
+
+        /* ─── LOADING ───────────────────────────────────────────── */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 10, 26, 0.85);
+            z-index: 1000;
+            backdrop-filter: blur(8px);
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .spinner {
+            width: 48px; height: 48px;
+            border: 3px solid var(--glass-border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+
+        .loading-subtext {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            max-width: 350px;
+            text-align: center;
+        }
+
+        /* ─── RESULTS SECTION ───────────────────────────────────── */
+        #results-section {
+            display: none;
+            animation: fadeInUp 0.6s ease-out both;
+        }
+
+        #results-section.visible {
+            display: block;
+        }
+
+        /* ─── RECOMMENDATION CARD ───────────────────────────────── */
+        .recommendation-card {
+            background: linear-gradient(135deg, rgba(233, 69, 96, 0.12), rgba(0, 210, 255, 0.08));
+            border: 1px solid var(--border-glow);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .recommendation-card::before {
+            content: '';
+            position: absolute;
+            top: 0; right: 0;
+            width: 200px; height: 200px;
+            background: radial-gradient(circle, rgba(233, 69, 96, 0.1), transparent 70%);
+            pointer-events: none;
+        }
+
+        .best-model-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1.2rem;
+            background: var(--accent-soft);
+            border: 1px solid var(--accent);
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--accent);
+            margin-bottom: 1rem;
+        }
+
+        .verdict-text {
+            white-space: pre-line;
+            line-height: 1.8;
+            font-size: 0.92rem;
+            color: var(--text-secondary);
+        }
+
+        .verdict-text strong {
+            color: var(--text-primary);
+        }
+
+        /* ─── METRICS TABLE ─────────────────────────────────────── */
+        .table-wrapper {
+            overflow-x: auto;
+            border-radius: var(--radius-sm);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+
+        thead th {
+            background: var(--bg-secondary);
+            padding: 0.75rem 0.8rem;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid var(--border);
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+            transition: color var(--transition);
+        }
+
+        thead th:hover {
+            color: var(--accent);
+        }
+
+        thead th.sorted-asc::after { content: ' ▲'; color: var(--accent); }
+        thead th.sorted-desc::after { content: ' ▼'; color: var(--accent); }
+
+        tbody tr {
+            border-bottom: 1px solid var(--glass-border);
+            transition: background var(--transition);
+        }
+
+        tbody tr:hover {
+            background: rgba(233, 69, 96, 0.05);
+        }
+
+        tbody tr.best-row {
+            background: var(--accent-soft);
+        }
+
+        td {
+            padding: 0.65rem 0.8rem;
+            white-space: nowrap;
+        }
+
+        .fit-badge {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 50px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .fit-good { background: var(--green-soft); color: var(--green); }
+        .fit-overfit { background: var(--accent-soft); color: var(--accent); }
+        .fit-underfit { background: var(--yellow-soft); color: var(--yellow); }
+
+        /* ─── CHARTS GRID ───────────────────────────────────────── */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .chart-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 1rem;
+            backdrop-filter: blur(16px);
+            transition: transform var(--transition), border-color var(--transition);
+        }
+
+        .chart-card:hover {
+            transform: translateY(-3px);
+            border-color: var(--border);
+        }
+
+        .chart-card img {
+            width: 100%;
+            height: auto;
+            border-radius: var(--radius-sm);
+            display: block;
+        }
+
+        .chart-card .chart-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            text-align: center;
+            margin-top: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* ─── PREPROCESS LOG ────────────────────────────────────── */
+        .log-toggle {
+            background: none;
+            border: none;
+            color: var(--cyan);
+            font-family: inherit;
+            font-size: 0.85rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.3rem 0;
+            font-weight: 500;
+        }
+
+        .log-toggle:hover { text-decoration: underline; }
+
+        .log-content {
+            display: none;
+            margin-top: 0.75rem;
+            padding: 1rem;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-sm);
+            font-size: 0.82rem;
+            line-height: 1.8;
+            color: var(--text-secondary);
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .log-content.open { display: block; }
+
+        .log-line {
+            padding: 0.15rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+
+        /* ─── WARNINGS ──────────────────────────────────────────── */
+        .warning-banner {
+            background: var(--yellow-soft);
+            border: 1px solid rgba(255, 171, 0, 0.3);
+            border-radius: var(--radius-sm);
+            padding: 0.75rem 1rem;
+            margin-bottom: 1rem;
+            font-size: 0.85rem;
+            color: var(--yellow);
+        }
+
+        .error-banner {
+            background: var(--accent-soft);
+            border: 1px solid rgba(233, 69, 96, 0.3);
+            border-radius: var(--radius-sm);
+            padding: 0.75rem 1rem;
+            margin-bottom: 1rem;
+            font-size: 0.85rem;
+            color: var(--accent);
+        }
+
+        /* ─── SECTION DIVIDER ───────────────────────────────────── */
+        .section-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin: 2.5rem 0 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .section-title::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, var(--border), transparent);
+        }
+
+        /* ─── ANIMATIONS ────────────────────────────────────────── */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ─── SCROLLBAR ─────────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+        /* ─── RESPONSIVE ────────────────────────────────────────── */
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .header h1 { font-size: 1.6rem; }
+            .controls-row { grid-template-columns: 1fr; }
+            .charts-grid { grid-template-columns: 1fr; }
+            .summary-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- LOADING OVERLAY -->
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text">Training models...</div>
+        <div class="loading-subtext">Running all models and generating bias-variance charts. This may take a moment.</div>
+    </div>
+
+    <div class="container">
+        <!-- HEADER -->
+        <header class="header">
+            <h1>ML Bias-Variance Tradeoff Analyzer</h1>
+            <p>Upload any CSV. Train 15-18 models. Visualize the tradeoff. Find the best model.</p>
+        </header>
+
+        <!-- UPLOAD CARD -->
+        <div class="card" id="upload-card" style="animation-delay: 0.1s">
+            <div class="card-title">
+                <span class="icon" style="background: var(--accent-soft); color: var(--accent);">1</span>
+                Upload Dataset
+            </div>
+            <div class="upload-zone" id="upload-zone">
+                <span class="upload-icon">&#128202;</span>
+                <h3>Drop your CSV file here</h3>
+                <p>or click to browse &bull; CSV only &bull; 100 - 50,000 rows</p>
+                <input type="file" id="file-input" accept=".csv">
+                <div class="file-info" id="file-info" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- DATASET SUMMARY (hidden until file uploaded) -->
+        <div class="card" id="summary-card" style="display: none; animation-delay: 0.2s">
+            <div class="card-title">
+                <span class="icon" style="background: var(--cyan-soft); color: var(--cyan);">&#9432;</span>
+                Dataset Summary
+            </div>
+            <div id="warnings-container"></div>
+            <div class="summary-grid" id="summary-grid"></div>
+        </div>
+
+        <!-- CONFIGURATION (hidden until file uploaded) -->
+        <div class="card" id="config-card" style="display: none; animation-delay: 0.3s">
+            <div class="card-title">
+                <span class="icon" style="background: var(--green-soft); color: var(--green);">2</span>
+                Configure & Run
+            </div>
+            <div class="controls-row">
+                <div class="form-group">
+                    <label for="target-select">Target Column</label>
+                    <select id="target-select">
+                        <option value="">-- select --</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="task-select">Task Type</label>
+                    <select id="task-select">
+                        <option value="auto">Auto-detect</option>
+                        <option value="regression">Regression</option>
+                        <option value="classification">Classification</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" id="run-btn" disabled>
+                    &#9654; Run Analysis
+                </button>
+            </div>
+        </div>
+
+        <!-- RESULTS SECTION (hidden until analysis complete) -->
+        <div id="results-section">
+
+            <!-- RECOMMENDATION -->
+            <h2 class="section-title">&#127942; Recommendation</h2>
+            <div class="card recommendation-card" id="recommendation-card">
+                <div class="best-model-badge" id="best-model-badge"></div>
+                <div class="verdict-text" id="verdict-text"></div>
+            </div>
+
+            <!-- METRICS TABLE -->
+            <h2 class="section-title">&#128202; Model Metrics</h2>
+            <div class="card">
+                <div class="card-title">
+                    <span class="icon" style="background: var(--cyan-soft); color: var(--cyan);">&#128200;</span>
+                    All Models Ranked
+                </div>
+                <div class="table-wrapper">
+                    <table id="metrics-table">
+                        <thead id="metrics-thead"></thead>
+                        <tbody id="metrics-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- CHARTS -->
+            <h2 class="section-title">&#128201; Visualizations</h2>
+            <div class="charts-grid" id="charts-grid"></div>
+
+            <!-- PREPROCESS LOG -->
+            <h2 class="section-title">&#128203; Preprocessing Log</h2>
+            <div class="card">
+                <button class="log-toggle" id="log-toggle" onclick="toggleLog()">
+                    &#9660; Show preprocessing steps
+                </button>
+                <div class="log-content" id="log-content"></div>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="charts.js"></script>
+</body>
+</html>
