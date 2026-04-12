@@ -59,6 +59,7 @@ class PreprocessResult:
     target_column:    str
     n_classes:        int               # 0 for regression
     class_labels:     list              # [] for regression
+    class_balance:    dict              # {} for regression
 
     # Fitted objects (needed if we want to inverse-transform predictions later)
     scaler:           StandardScaler
@@ -148,10 +149,17 @@ def preprocess(
     X = df.drop(columns=[target_column])
     y = df[target_column].copy()
     feature_names = list(X.columns)
+    class_balance = {}
 
     # ── 14. ENCODE TARGET FOR CLASSIFICATION ──────────────────────────────────
     label_encoder = None
     if task_type == "classification":
+        label_counts = y.astype(str).value_counts()
+        class_balance = {
+            str(label): round(float(count / len(y)), 4)
+            for label, count in label_counts.items()
+        }
+
         le = LabelEncoder()
         y = pd.Series(le.fit_transform(y.astype(str)), name=target_column)
         label_encoder = le
@@ -198,6 +206,7 @@ def preprocess(
         target_column  = target_column,
         n_classes      = n_classes,
         class_labels   = class_labels,
+        class_balance  = class_balance,
         scaler         = scaler,
         label_encoder  = label_encoder,
         log            = log,

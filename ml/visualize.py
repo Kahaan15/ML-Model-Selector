@@ -9,13 +9,14 @@ Usage:
     charts = generate_charts(result, models, metrics_df, best_model_name)
     # charts = {"model_comparison": "base64string...", ...}
 
-Regression charts (7):
+Regression charts (8, when supported):
     model_comparison, train_vs_test, r2_comparison,
-    poly_complexity, dt_complexity, knn_complexity, predicted_vs_actual
+    poly_complexity, dt_complexity, knn_complexity, predicted_vs_actual,
+    feature_importance
 
-Classification charts (6):
+Classification charts (7, when supported):
     model_comparison, train_vs_test, f1_comparison,
-    dt_complexity, knn_complexity, confusion_matrix
+    dt_complexity, knn_complexity, confusion_matrix, feature_importance
 """
 
 import io
@@ -148,6 +149,8 @@ def _regression_charts(result, models, df, best_name) -> dict:
             xlabel="Max Depth (20 = unlimited)",
             ylabel="MSE",
             title="Complexity Curve: Decision Tree Depth vs Error",
+            best_x=depths[int(np.argmin(dt_df["test_mse"].to_numpy()))],
+            best_label="Optimal depth",
         )
 
     # 6. KNN complexity curve
@@ -173,6 +176,14 @@ def _regression_charts(result, models, df, best_name) -> dict:
             y_pred=test_pred,
             title=f"Predicted vs Actual ({best_name})",
         )
+
+        feature_importance_chart = _feature_importance_chart(
+            best_model,
+            result.feature_names,
+            title=f"Top Feature Importances ({best_name})",
+        )
+        if feature_importance_chart is not None:
+            charts["feature_importance"] = feature_importance_chart
 
     return charts
 
@@ -228,6 +239,8 @@ def _classification_charts(result, models, df, best_name) -> dict:
             xlabel="Max Depth (20 = unlimited)",
             ylabel="Accuracy",
             title="Complexity Curve: Decision Tree Depth vs Accuracy",
+            best_x=depths[int(np.argmax(dt_df["test_accuracy"].to_numpy()))],
+            best_label="Optimal depth",
         )
 
     # 5. KNN complexity curve
@@ -254,6 +267,14 @@ def _classification_charts(result, models, df, best_name) -> dict:
             class_labels=result.class_labels,
             title=f"Confusion Matrix ({best_name})",
         )
+
+        feature_importance_chart = _feature_importance_chart(
+            best_model,
+            result.feature_names,
+            title=f"Top Feature Importances ({best_name})",
+        )
+        if feature_importance_chart is not None:
+            charts["feature_importance"] = feature_importance_chart
 
     return charts
 
@@ -318,7 +339,8 @@ def _grouped_bar(names, values1, values2, label1, label2,
 
 
 def _complexity_curve(x_values, train_vals, test_vals,
-                      xlabel, ylabel, title, invert_x=False) -> str:
+                      xlabel, ylabel, title, invert_x=False,
+                      best_x=None, best_label=None) -> str:
     """Line plot showing train vs test error across model complexity."""
     fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -339,6 +361,25 @@ def _complexity_curve(x_values, train_vals, test_vals,
     ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
     ax.legend(framealpha=0.8)
     ax.grid(True, linestyle="--")
+
+    if best_x is not None:
+        best_indices = [i for i, x in enumerate(xs) if x == best_x]
+        if best_indices:
+            best_idx = best_indices[0]
+            best_y = tests[best_idx]
+            ax.axvline(best_x, color=COLOR_BEST, linestyle=":", linewidth=1.6, alpha=0.95)
+            label = best_label or "Best point"
+            depth_text = "unlimited" if best_x == 20 and "Depth" in title else str(best_x)
+            ax.annotate(
+                f"{label}: {depth_text}",
+                xy=(best_x, best_y),
+                xytext=(10, 10),
+                textcoords="offset points",
+                color="#eee",
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.25", facecolor=COLOR_BEST, edgecolor="none", alpha=0.9),
+                arrowprops=dict(arrowstyle="->", color=COLOR_BEST, linewidth=1.2),
+            )
 
     if invert_x:
         ax.invert_xaxis()
@@ -374,6 +415,49 @@ def _scatter_pred_vs_actual(y_true, y_pred, title) -> str:
 
     fig.tight_layout()
     return _fig_to_base64(fig)
+
+
+def _feature_importance_chart(model, feature_names, title, top_n=5) -> str | None:
+    """Render top feature importances for models that expose them."""
+    estimator = _extract_final_estimator(model)
+    importances = getattr(estimator, "feature_importances_", None)
+
+    if importances is None or not feature_names:
+        return None
+
+    pairs = list(zip(feature_names, importances))
+    pairs = sorted(pairs, key=lambda item: item[1], reverse=True)[:top_n]
+    pairs.reverse()  # horizontal bar chart reads better low-to-high bottom-up
+
+    labels = [name for name, _ in pairs]
+    values = [float(score) for _, score in pairs]
+
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    bars = ax.barh(labels, values, color=COLOR_TRAIN, edgecolor="#222", linewidth=0.6)
+
+    ax.set_xlabel("Importance")
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
+    ax.grid(axis="x", linestyle="--")
+
+    for bar, value in zip(bars, values):
+        ax.text(
+            value + max(values) * 0.02 if max(values) > 0 else 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            f"{value:.3f}",
+            va="center",
+            fontsize=8,
+            color="#eee",
+        )
+
+    fig.tight_layout()
+    return _fig_to_base64(fig)
+
+
+def _extract_final_estimator(model):
+    """Get the final estimator from a sklearn Pipeline-like model."""
+    if hasattr(model, "named_steps") and model.named_steps:
+        return list(model.named_steps.values())[-1]
+    return model
 
 
 def _confusion_matrix_chart(y_true, y_pred, class_labels, title) -> str:

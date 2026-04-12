@@ -68,7 +68,7 @@ def run_pipeline(source, target_column=None, task_type=None) -> dict:
     baseline = compute_baseline(result)
 
     # ── Step 4: Recommend best model ─────────────────────────────────────────
-    recommendation = recommend(metrics_df)
+    recommendation = recommend(metrics_df, result=result)
 
     # ── Step 4b: Confusion matrix insights (classification only) ─────────────
     best_model_obj = models.get(recommendation["best_model"])
@@ -93,6 +93,7 @@ def run_pipeline(source, target_column=None, task_type=None) -> dict:
             "task_type": result.task_type,
             "n_classes": result.n_classes,
             "class_labels": result.class_labels,
+            "class_balance": result.class_balance,
         },
     }
 
