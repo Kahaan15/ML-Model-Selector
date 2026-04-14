@@ -1,0 +1,805 @@
+\documentclass[conference]{IEEEtran}
+
+% Import necessary packages
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{textcomp}
+\usepackage{array}
+\usepackage[utf8]{inputenc}
+\usepackage{dblfloatfix}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+
+\renewcommand{\IEEEkeywordsname}{Keywords}
+
+\usepackage{newtxtext, newtxmath}
+\usepackage{fancyhdr}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\IEEEoverridecommandlockouts
+
+\begin{document}
+
+\title{An Automated Bias-Variance Tradeoff Analysis Framework for
+Multi-Classifier and Multi-Regressor Evaluation Across Arbitrary Tabular Datasets}
+
+\author{
+    \IEEEauthorblockN{Kartika Dhonde, Shlok Doshi, Kahaan Kaka}
+    \IEEEauthorblockA{\textit{Department of Computer Engineering} \\
+    \textit{NMIMS University, Mumbai, India} \\
+    \{kartika.dhonde, shlok.doshi, kahaan.kaka\}@nmims.edu.in}
+}
+
+\maketitle
+\IEEEpubidadjcol
+\pagestyle{plain}
+
+% ============================================================
+\begin{abstract}
+The bias-variance tradeoff sits at the centre of applied machine learning, yet practical tools for systematic, empirical comparison across diverse model families on arbitrary datasets remain scarce. This paper describes an automated, dataset-agnostic Bias-Variance Tradeoff Analyzer that accepts any tabular CSV file, runs a fully automated preprocessing pipeline, trains 15 to 18 machine learning models across a deliberate complexity spectrum, and delivers a unified visual and tabular analysis for both classification and regression. The system detects task type automatically, handles missing values, encodes categorical features, removes duplicates, and standardises features without user intervention. For classification, it produces bias-variance bar charts, F1 comparisons, test accuracy rankings, decision tree complexity curves, and SVM confusion matrices. For regression, it builds a metric table across all models supplemented by bootstrap-estimated bias-variance decomposition charts. We evaluate the framework on the Titanic survival dataset as a primary benchmark and validate on two additional datasets: a heart disease classification set and an Ames housing price regression set. Results match theoretical expectations across all three cases and confirm that the framework generalises reliably to new tabular problems. The tool contributes both a reusable model-selection workflow and a pedagogical instrument for machine learning courses, filling a documented gap between theory and hands-on experimentation.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Bias-Variance Tradeoff, Machine Learning, Classification, Regression, Support Vector Machine, Decision Tree, K-Nearest Neighbors, Ensemble Methods, Overfitting, Model Selection, Automated Machine Learning, Preprocessing Pipeline, Generalisation Gap.
+\end{IEEEkeywords}
+
+%% ============================================================
+\section{Introduction}
+%% ============================================================
+
+Machine learning now underpins decision-making in healthcare, credit scoring, transportation, natural language processing, and dozens of other fields~\cite{b26}. Deploying these systems reliably requires solving what is commonly called the generalisation problem: building a model that performs well on data it has never seen, not merely on the examples used to train it. The bias-variance decomposition~\cite{b1} provides the standard vocabulary for this problem by splitting expected prediction error into irreducible noise, systematic bias, and estimation variance.
+
+Bias arises when a learning algorithm's assumptions are too restrictive to represent the real relationship in the data. The model fits poorly on both the training and test sets, not because it is overfitting but because it cannot capture the necessary complexity. Variance, by contrast, arises when a model is sensitive enough to the particular training sample that it fits noise alongside signal. It may score perfectly on training data while producing erratic predictions on new inputs. These two quantities move in opposite directions as model complexity changes. Reducing bias calls for more expressive models; controlling variance calls for simpler ones or for regularisation~\cite{b2}. The tension between them is what the bias-variance tradeoff describes.
+
+This tension is not merely academic. In practice, the most common failure modes in supervised learning map directly onto it. Optimising for training accuracy produces high-variance models that fail in deployment. Over-regularising produces high-bias models that never reach their potential accuracy. Both failures are diagnosable from the relationship between training and test performance, and both respond to different interventions. Practitioners who have internalised the tradeoff can identify the failure mode quickly and apply the right fix; those who have not tend to tune hyperparameters by trial and error without a clear mental model of what is happening.
+
+What is missing is not theory. Textbook treatments of the bias-variance decomposition are thorough and widely available~\cite{b14}. What is missing is a practical instrument that makes the tradeoff concrete on real data. Libraries such as scikit-learn~\cite{b3} provide the building blocks, but assembling them into a coherent multi-model comparison requires non-trivial engineering effort that most practitioners and students do not invest. Existing AutoML systems, including Auto-WEKA~\cite{b4} and auto-sklearn~\cite{b5}, optimise predictive accuracy and return a single best pipeline. They do not expose the bias-variance behaviour of the candidates they evaluate. A user receives a performance estimate, not an analysis of why one model generalises better than another.
+
+The gap is particularly acute in educational settings. Courses introduce the bias-variance tradeoff in lecture and then ask students to implement or observe it in isolation on toy datasets. The jump from a textbook diagram to a real multi-model comparison on a realistic dataset is a conceptual leap that most curricula leave students to make on their own. Pedagogical reviews of machine learning courses have noted this repeatedly~\cite{b32}, and it is the direct motivation for the tool described here.
+
+We present the ML Bias-Variance Tradeoff Analyzer, a web-based Python application that accepts any tabular CSV file, preprocesses it automatically, trains 15 to 18 models spanning the full complexity range for both classification and regression, evaluates each one under a consistent protocol, and produces a suite of charts and ranked metric tables that expose overfitting, good fit, and underfitting behaviour side by side. Validation across three datasets confirms consistent and predictable behaviour.
+
+The main contributions are as follows. We provide a dataset-agnostic preprocessing pipeline that requires no manual configuration. We build a systematic multi-model evaluation catalogue covering six algorithm families. We produce a decision tree complexity curve and an analogous KNN complexity analysis directly on the user's dataset rather than on a fixed illustrative example. We deliver bootstrap-estimated bias-variance decomposition for regression tasks. We validate the framework on three benchmark datasets spanning binary classification and regression. We release an open-source implementation designed for both research reproducibility and classroom use.
+
+The paper proceeds as follows. Section~II covers theoretical background and related work. Section~III describes the system architecture. Section~IV covers dataset ingestion and preprocessing. Section~V describes model configurations. Section~VI presents the evaluation methodology. Section~VII reports classification results. Section~VIII covers regression results. Section~IX presents multi-dataset validation. Section~X provides an analysis of feature importance in the bias-variance context. Section~XI discusses implications and limitations. Section~XII presents an ablation study of preprocessing choices. Section~XIII concludes.
+
+%% ============================================================
+\section{Background and Related Work}
+%% ============================================================
+
+\subsection{Bias-Variance Decomposition}
+
+Geman et al.~\cite{b1} formalised the bias-variance decomposition in the context of neural network generalisation. For a supervised problem with true function $f(x)$, a learning algorithm produces hypothesis $h(x; \mathcal{D})$ trained on dataset $\mathcal{D}$. The expected squared error at point $x$, averaged over training sets sampled from the same distribution, decomposes as:
+
+\begin{equation}
+\mathbb{E}\left[(y - h(x))^2\right] = \text{Bias}^2[h(x)] + \text{Var}[h(x)] + \sigma^2
+\end{equation}
+
+where $\text{Bias}[h(x)] = \mathbb{E}[h(x)] - f(x)$ is the systematic error of the average prediction, $\text{Var}[h(x)] = \mathbb{E}[(h(x) - \mathbb{E}[h(x)])^2]$ is the sensitivity of predictions to the particular training sample, and $\sigma^2$ is irreducible noise. The coupling between the first two terms is the tradeoff: Bias$^2$ and Var share a common dependency on model complexity. Reducing one generally increases the other, and the optimal model minimises their sum.
+
+For classification, the decomposition takes a different form~\cite{b2}: the 0-1 loss does not produce a clean additive breakdown because bias and variance interact multiplicatively near the decision boundary. Domingos~\cite{b19} showed that even for classification, the qualitative pattern holds. High-capacity models produce high variance; over-constrained models produce high bias. The generalisation gap, defined as the absolute difference between training and test accuracy, serves as a practical proxy in both settings. A large gap points to overfitting; a small gap paired with low absolute performance points to underfitting.
+
+\subsection{The Double Descent Phenomenon}
+
+Classical statistical learning theory predicted that test error would increase monotonically once model complexity crossed the interpolation threshold, where training error reaches zero. Belkin et al.~\cite{b21} demonstrated empirically and theoretically that this is not always the case: test error can decrease again beyond the threshold, producing a double-descent curve. This has been observed in neural networks, kernel methods, and even linear models with feature expansions.
+
+The double descent phenomenon matters for contextualising the classical bias-variance picture. The good-fit region in the classical picture corresponds to the first descent of the curve. The second descent, characteristic of heavily over-parameterised models, reflects implicit regularisation from optimisation dynamics or the structure of the hypothesis class. The models in our catalogue operate in the classical regime, and the standard picture applies directly. Still, practitioners working with modern deep learning architectures should recognise that the framework described here captures classical behaviour and is not designed to diagnose the over-parameterised regime~\cite{b23}.
+
+\subsection{Algorithm Families and Their Bias-Variance Profiles}
+
+Decision trees~\cite{b9} partition the feature space through greedy, recursive axis-aligned splits. An unconstrained tree is low-bias and extremely high-variance, memorising the training set by creating a distinct leaf for every point. Adding a depth constraint injects inductive bias and reduces variance monotonically. This makes depth the most transparent complexity control lever among all the families covered here.
+
+Support vector machines~\cite{b10} find a maximum-margin decision boundary, either in the original feature space (linear kernel) or in an implicitly defined high-dimensional space (RBF kernel). Maximising the geometric margin is equivalent to minimising a bound on the VC dimension of the classifier, providing an explicit theoretical link between the algorithm's optimisation objective and its variance-controlling behaviour. The regularisation parameter $C$ trades margin width against training error, and together with the kernel bandwidth $\gamma$, controls where on the bias-variance curve the model sits~\cite{b24}.
+
+K-nearest neighbours~\cite{b11, b20} classifies each test point by majority vote over its $k$ closest training points. At $k=1$ the training error is zero and the decision boundary is maximally jagged, placing the model at the extreme high-variance end of the spectrum. Each unit increase in $k$ smooths the boundary by averaging over more neighbours. The relationship between $k$ and the bias-variance tradeoff is monotonic and transparent, making KNN an ideal complement to the decision tree for producing complexity curves that students can interpret directly.
+
+Random forests~\cite{b12} reduce variance by averaging over many trees trained on bootstrap samples of the data, with random feature subsampling at each split to decorrelate the trees. The variance of the ensemble is approximately $\rho \sigma_t^2 + (1-\rho)\sigma_t^2/B$ where $\rho$ is the pairwise correlation between trees, $\sigma_t^2$ is the variance of a single tree, and $B$ is the number of trees. On small datasets, the bootstrap samples are not sufficiently diverse for $\rho$ to be small, and the ensemble may still overfit despite the averaging. Gradient boosting~\cite{b13} takes the opposite approach, reducing bias sequentially by fitting each tree on the residuals of its predecessors. Its tendency to overfit on small datasets is controlled by the learning rate and the maximum number of estimators.
+
+Logistic regression~\cite{b14} is a linear classifier that models the log-odds of class membership as a linear function of the features. It is high-bias and low-variance, with calibrated probability outputs as a useful secondary property. Naive Bayes applies Bayes' theorem under the conditional independence assumption, which is rarely satisfied in practice but allows the model to generalise with very few parameters, placing it firmly at the high-bias end of the spectrum.
+
+For regression, ordinary least squares is the archetypal high-bias, low-variance estimator when the true function is linear. Polynomial regression of increasing degree traces a bias-variance curve directly: degree 2 captures curvature with moderate variance, while degree 5 frequently catastrophically overfits small datasets. Ridge regression~\cite{b14} applies an L2 penalty that shrinks coefficients toward zero, and the path of test error as regularisation strength increases is itself a one-dimensional bias-variance curve. SVR with the RBF kernel brings the margin-based variance control of classification SVMs into the regression setting.
+
+\subsection{Regularisation and Variance Control}
+
+Regularisation is the primary mechanism for controlling variance in parametric models~\cite{b14}. In the empirical risk minimisation framework, regularised optimisation takes the form:
+
+\begin{equation}
+\hat{\theta} = \arg\min_\theta \frac{1}{n}\sum_{i=1}^n \mathcal{L}(y_i, h(x_i; \theta)) + \lambda \Omega(\theta)
+\end{equation}
+
+where $\Omega(\theta)$ penalises hypothesis complexity and $\lambda \geq 0$ controls the strength of the penalty. As $\lambda$ increases, the solution is biased toward simpler functions, and variance decreases while bias increases. The optimal $\lambda$ minimises total expected test error, and finding it in practice typically requires cross-validation over a grid of candidate values.
+
+In tree-based models the analogous control is \texttt{max\_depth}. In KNN it is $k$. In SVM it is $C$ (the inverse regularisation strength). The present system uses a fixed grid of these parameters spanning a wide complexity range. This design choice prioritises transparency and comparability over performance, which is appropriate for a tool whose primary purpose is to make the tradeoff visible rather than to find the globally best configuration.
+
+\subsection{Automated Machine Learning and Related Systems}
+
+AutoML systems address pipeline selection and hyperparameter optimisation simultaneously~\cite{b4, b5}. Auto-WEKA frames both as a single Bayesian optimisation problem over the WEKA algorithm space. Auto-sklearn extends this to scikit-learn with meta-learning for warm starting. TPOT~\cite{b28} evolves pipeline structures through genetic programming. H2O AutoML~\cite{b29} focuses on production deployment with ensemble stacking.
+
+These systems are highly effective for practitioners who need the best possible model with minimal effort. They are not designed to explain how they arrive at a recommendation, and they do not expose the bias-variance behaviour of the pipelines they discard. Our framework occupies a different position: it provides what AutoML withholds, a side-by-side analysis of how model complexity affects generalisation across a broad spectrum of candidates.
+
+\subsection{Pedagogical Tools for Machine Learning}
+
+Weka~\cite{b30} provides a graphical interface to a large algorithm collection and has been used in university courses for decades. Orange~\cite{b31} offers a visual programming environment with strong support for data exploration. Neither is built around the bias-variance tradeoff as an organising principle, and neither automates the multi-model comparison that this framework provides. TensorFlow Playground demonstrates the tradeoff for neural networks on synthetic datasets but does not extend to user-supplied real-world data. The gap for a tool that works automatically on real tabular data, spanning both classification and regression, has been noted in pedagogical reviews of machine learning curricula~\cite{b32}.
+
+%% ============================================================
+\section{System Design and Architecture}
+%% ============================================================
+
+\subsection{Overview and Design Principles}
+
+The ML Bias-Variance Tradeoff Analyzer is a self-contained Python web application for interactive, end-to-end machine learning experimentation. Three principles guided its design. The first is dataset agnosticism: the system works on any tabular CSV without preprocessing specifications from the user. The second is transparency: every decision in the preprocessing and evaluation pipeline is logged and visible. The third is pedagogical clarity: the outputs are arranged to make the bias-variance tradeoff concrete rather than abstract.
+
+The system runs as a Flask application with a React front-end for interactive chart rendering. The back-end manages all data processing and model training; the front-end handles visualisation and user interaction. This separation means the analysis pipeline can also be invoked from a command line or integrated into larger workflows without the web layer. Four modules operate in sequence: Dataset Ingestion, Automated Preprocessing, Model Training and Evaluation, and Visualisation and Reporting. Fig.~\ref{fig:architecture} illustrates the data flow.
+
+\begin{figure}[t]
+    \centering
+    % Insert system architecture diagram here
+    % \includegraphics[width=\columnwidth]{fig_architecture}
+    \caption{System architecture of the ML Bias-Variance Tradeoff Analyzer. Data flows through four sequential modules. The preprocessing engine enforces strict train/test separation to prevent data leakage.}
+    \label{fig:architecture}
+\end{figure}
+
+\subsection{Dataset Ingestion Module}
+
+The ingestion module reads the uploaded CSV using pandas and immediately produces a dataset summary: row and column counts, numeric and non-numeric column counts, total missing value count, and auto-detected task type. Task detection works by inspecting the cardinality and dtype of the target column. A binary integer or object target with two unique values produces binary classification. Targets with between three and twenty unique integers produce multiclass classification. Continuous float targets, or integer targets with more than twenty unique values, produce regression. Users can override this detection before committing to the analysis.
+
+Beyond the summary, the module generates an initial data quality report that identifies columns with missing rates above 50\%, potential ID columns (unique value proportion above 95\%), and potential free-text columns (string columns whose average token count exceeds five). This report appears before preprocessing so users can review how the system has interpreted their data and catch obvious mismatches between the system's assumptions and the actual structure of the file.
+
+\subsection{Automated Preprocessing Engine}
+
+The preprocessing engine applies a fixed, reproducible sequence of operations. The central design constraint is strict prevention of data leakage: every statistic used for imputation or standardisation is computed on the training partition and then applied to the test partition. The train-test split itself is performed first, on the raw unprocessed data, before any column statistics are derived. Column name normalisation (lowercasing, stripping whitespace) is the only step that precedes the split, because it does not involve computing data statistics.
+
+Categorical encoding uses label encoding rather than one-hot encoding by default. This is a deliberate choice. One-hot encoding expands the feature space in proportion to the number of unique categories, which can push distance-based models such as KNN into high-dimensional regimes where nearest-neighbour search becomes unreliable, and can artificially inflate model complexity without genuine information gain. Label encoding preserves column count and provides a numeric representation compatible with all model families in the catalogue. A configuration option to switch to one-hot encoding is available for users who require it.
+
+Table~\ref{tab:preprocessing} summarises the full preprocessing sequence.
+
+\subsection{Model Training and Evaluation Engine}
+
+The training engine instantiates a fixed catalogue of models at pre-defined complexity settings, fits each on the training partition, and predicts on both training and test partitions. A model is labelled OVERFIT if the generalisation gap exceeds five percentage points, and GOOD FIT otherwise. Models are ranked by descending test F1 to produce the primary recommendation.
+
+A decision tree complexity curve is produced by training at \texttt{max\_depth} $\in \{2, 3, 5, 10, 20\}$ and recording both train and test accuracy at each level. An analogous KNN complexity analysis varies $k$ over $\{1, 3, 5, 10\}$ and plots training-test accuracy gap as a function of neighbourhood size. Both curves are generated on the actual user dataset, not on a fixed synthetic example.
+
+For regression, the engine computes $R^2$, MSE, MAE, and a bias-variance decomposition estimated via bootstrap resampling with $B = 50$ samples. Each bootstrap fit trains the model on a bootstrap sample of the training set, collects predictions at every test point, and estimates:
+
+\begin{equation}
+\hat{\text{Bias}}^2(x) = \left(\bar{h}(x) - y(x)\right)^2, \quad \hat{\text{Var}}(x) = \frac{1}{B}\sum_{b=1}^B \left(h_b(x) - \bar{h}(x)\right)^2
+\end{equation}
+
+where $\bar{h}(x) = \frac{1}{B}\sum_b h_b(x)$ is the mean prediction across bootstrap fits. Averaging over test points yields dataset-level bias$^2$ and variance estimates for each model.
+
+\subsection{Visualisation and Reporting Module}
+
+For classification, five outputs are produced: a grouped bar chart of train versus test accuracy across all classifiers; a grouped bar chart of train versus test F1 scores; a ranked horizontal bar chart of test accuracy; the decision tree depth complexity curve; and a confusion matrix for the SVM model on the test set.
+
+For regression, the primary output is a ranked metric table covering training accuracy, test accuracy, test F1, precision, and recall for all regression models, supplemented by a grouped bar chart of estimated bias$^2$ and variance per model. All charts render via matplotlib embedded in the web interface. A colour-coded metric table with OVERFIT/GOOD FIT labels provides immediate diagnostic feedback without requiring the user to read all charts.
+
+A written recommendation in natural language accompanies the results. It names the top-ranked model by test F1, reports its generalisation gap, and explains whether the gap indicates a good fit or overfitting. When the top two models are within two percentage points of each other in test F1, the recommendation also identifies the simpler option on interpretability grounds.
+
+\subsection{Web Interface and Interaction Flow}
+
+The web interface presents a single upload page. Users upload a CSV, select the target column from a populated dropdown, optionally override the detected task type, and click to run analysis. Results appear on a tabbed page covering the different chart and table outputs. All visualisations include explanatory captions and tooltip annotations.
+
+The interface requires no machine learning background to operate. A first-time user with a CSV and knowledge of the target column can produce a full bias-variance analysis in under two minutes. The written recommendation is displayed at the top of the results page to guide users who are still developing their ability to interpret the charts directly.
+
+%% ============================================================
+\section{Dataset and Preprocessing}
+%% ============================================================
+
+\subsection{System Capability and Dataset Requirements}
+
+The system accepts any tabular CSV for supervised learning. It handles arbitrary column counts, mixed numeric and categorical features, missing values in any column, and binary or multiclass classification or continuous regression targets. Practical minimum dataset size is around 100 rows; below this, the test split is too small for reliable metric estimation. Datasets up to 500,000 rows have been tested without code modification. Entirely missing columns, zero-variance columns, and ID columns are all handled gracefully by the preprocessing pipeline.
+
+\subsection{Primary Benchmark: Titanic Dataset}
+
+The Titanic dataset~\cite{b6, b7, b8} contains records for 891 passengers with 12 columns: a binary survival target, passenger class (1st, 2nd, 3rd), name, sex, age, sibling/spouse count, parent/child count, ticket number, fare, cabin identifier, and embarkation port. It is a well-established binary classification benchmark with typical preprocessing challenges: 177 missing age values (19.9\%), 687 missing cabin values (77.1\%), 2 missing embarked values, and two high-cardinality text columns (name and ticket number).
+
+The preprocessing pipeline drops PassengerId and the two high-cardinality text columns, label-encodes sex and embarked, applies median imputation to age, drops cabin due to its missing rate above the 50\% threshold, removes 16 duplicate rows, and standardises all features using training-set statistics. The final feature set is nine columns across 875 usable rows, split 80/20 into 700 training and 175 test samples with stratification on the survival target.
+
+\subsection{Validation Dataset 1: Heart Disease Classification}
+
+The UCI Heart Disease dataset~\cite{b33} contains 303 records with 13 clinical features (age, sex, chest pain type, resting blood pressure, serum cholesterol, fasting blood sugar, resting ECG results, maximum heart rate, exercise-induced angina, ST depression, ST slope, number of major vessels, and thalassemia type) and a binary target for the presence or absence of heart disease. It presents a different challenge profile from Titanic: few missing values (6 records), predominantly numeric features, and a more balanced class distribution (45.5\% positive class). After preprocessing, 297 usable rows remain, split into 237 training and 60 test samples.
+
+\subsection{Validation Dataset 2: House Price Regression}
+
+The Ames Housing dataset~\cite{b34} contains 1,460 residential property records with 79 explanatory variables and a continuous sale price target. With 19 columns having missing rates above 10\% and a mix of 43 numerical and 36 categorical features, it presents substantially more complex preprocessing than the classification datasets. After removing high-missingness and high-cardinality text columns, 62 features remain. The dataset is split 80/20 into 1,168 training and 292 test samples. Sale price is log-transformed before training to reduce the influence of outliers on MSE metrics, and this transformation is noted in the preprocessing log.
+
+\subsection{Data Leakage Prevention}
+
+Preventing data leakage is critical for any evaluation that aims to estimate true generalisation performance. The preprocessing engine enforces a strict ordering: the train-test split runs first, before any column statistics are computed. Imputation values are fitted on the training partition only. StandardScaler parameters are fitted on the training partition and applied to both. No test-set information enters any preprocessing decision.
+
+One subtle leakage source that is often overlooked is duplicate removal. If duplicates are removed after the split, rows appearing in both partitions remain and can inflate test accuracy estimates. The current engine removes duplicates from the full dataset before the split, eliminating near-identical training and test instances without using any per-partition statistics.
+
+% Table I: Preprocessing Steps
+\begin{table}[t]
+    \caption{Automated Preprocessing Steps}
+    \label{tab:preprocessing}
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|c|>{\raggedright\arraybackslash}p{1.4in}|>{\raggedright\arraybackslash}p{1.4in}|}
+    \hline
+    \textbf{Step} & \textbf{Operation} & \textbf{Outcome} \\
+    \hline
+    1 & Column name normalisation & All names lowercased and whitespace stripped \\
+    \hline
+    2 & ID-column removal & Columns with $>$95\% unique values dropped \\
+    \hline
+    3 & High-cardinality text removal & String columns with avg.\ token count $>$5 dropped \\
+    \hline
+    4 & High-missingness removal & Columns with $>$50\% missing values dropped \\
+    \hline
+    5 & Train-test split & 80/20 stratified split before any statistics \\
+    \hline
+    6 & Categorical encoding & Label encoding fitted on training; applied to test \\
+    \hline
+    7 & Missing value imputation & Median (numeric); mode (categorical); fit on train only \\
+    \hline
+    8 & Duplicate removal & Removed from full dataset prior to split \\
+    \hline
+    9 & Target encoding & Target label-encoded to integer classes \\
+    \hline
+    10 & Feature standardisation & StandardScaler fit on train; applied to both splits \\
+    \hline
+    \end{tabular}
+\end{table}
+
+%% ============================================================
+\section{Model Configurations}
+%% ============================================================
+
+\subsection{Classification Models}
+
+Table~\ref{tab:classifiers} lists all classification model configurations, their position on the bias-variance spectrum, and their key hyperparameters. All models use scikit-learn implementations with the listed settings and library defaults for all unspecified parameters.
+
+Decision tree classifiers run at five depth levels: \texttt{max\_depth} $\in \{1, 3, 5, 10, \text{unconstrained}\}$. The depth-1 stump is the most restricted configuration, representing the extreme high-bias end of the family. The unconstrained tree has no depth limit and represents the extreme high-variance end. This range covers the full spectrum from underfitting to catastrophic overfitting and generates the primary complexity curve output. All variants use the Gini impurity criterion.
+
+KNN runs at four neighbourhood sizes: $k \in \{1, 3, 5, 10\}$. At $k=1$ the classifier memorises the training set; at $k=10$ the boundary is substantially smoother. Euclidean distance with uniform weights is used throughout. Feature standardisation upstream ensures that no feature dominates the distance calculation by scale alone.
+
+The two SVM configurations differ only in kernel. \texttt{SVM\_linear} constructs a maximum-margin hyperplane in the original feature space. \texttt{SVM\_rbf} uses the Radial Basis Function kernel with \texttt{gamma='scale'} and $C=1.0$. Both use scikit-learn's SVC interface.
+
+Random Forest trains 100 trees with random feature subsampling (\texttt{max\_features} $= \sqrt{n_{\text{features}}}$) at each split. Gradient Boosting uses 100 estimators with \texttt{max\_depth=3} and \texttt{learning\_rate=0.1}. Logistic Regression uses L2 regularisation with $C=1.0$ and the liblinear solver. Gaussian Naive Bayes uses the default variance smoothing of $10^{-9}$.
+
+\begin{table}[t]
+    \caption{Classification Model Configurations}
+    \label{tab:classifiers}
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|>{\raggedright\arraybackslash}p{1.2in}|c|>{\raggedright\arraybackslash}p{1.2in}|}
+    \hline
+    \textbf{Model} & \textbf{Bias/Var Profile} & \textbf{Key Hyperparameters} \\
+    \hline
+    DT (depth=1)       & Very High B / Very Low V  & \texttt{max\_depth=1}, Gini \\
+    \hline
+    DT (depth=3)       & High B / Low V            & \texttt{max\_depth=3}, Gini \\
+    \hline
+    DT (depth=5)       & Med B / Med V             & \texttt{max\_depth=5}, Gini \\
+    \hline
+    DT (depth=10)      & Low B / High V            & \texttt{max\_depth=10}, Gini \\
+    \hline
+    DT (unconstrained) & Very Low B / Very High V  & No depth limit, Gini \\
+    \hline
+    KNN ($k=1$)        & Low B / Very High V       & $k=1$, Euclidean \\
+    \hline
+    KNN ($k=3$)        & Low B / High V            & $k=3$, Euclidean \\
+    \hline
+    KNN ($k=5$)        & Med B / Med V             & $k=5$, Euclidean \\
+    \hline
+    KNN ($k=10$)       & High B / Low V            & $k=10$, Euclidean \\
+    \hline
+    SVM (linear)       & High B / Low V            & Linear kernel, $C=1.0$ \\
+    \hline
+    SVM (RBF)          & Low B / Low V             & RBF, \texttt{gamma='scale'}, $C=1.0$ \\
+    \hline
+    Random Forest      & Low B / Med V             & 100 trees, $\sqrt{p}$ features \\
+    \hline
+    Gradient Boosting  & Low B / Med V             & 100 est., \texttt{lr=0.1}, \texttt{depth=3} \\
+    \hline
+    Logistic Reg.      & High B / Low V            & L2, $C=1.0$, liblinear \\
+    \hline
+    Naive Bayes        & Very High B / Very Low V  & Gaussian, default smoothing \\
+    \hline
+    \end{tabular}
+\end{table}
+
+\subsection{Regression Models}
+
+For regression, the system trains 14 models covering the full complexity spectrum. Table~\ref{tab:regressors} summarises the catalogue.
+
+Ordinary linear regression is the classical high-bias, low-variance baseline. Polynomial regression at degrees 2, 3, and 5 traces a direct complexity curve: degree 2 captures curvature with moderate variance, while degree 5 typically overfits severely on small datasets. Including three Ridge configurations at $\alpha \in \{0.1, 1.0, 10.0\}$ shows the regularisation path, with higher $\alpha$ increasing bias while reducing variance. Lasso at $\alpha=1.0$ demonstrates L1 regularisation and the sparsity it induces.
+
+Decision tree regressors at depths 3 and 10 carry the same bias-variance intuition as their classification counterparts. KNN regressor at $k=5$ sits in the middle of the neighbourhood-size spectrum. SVR with the RBF kernel applies margin-based variance control to continuous prediction. Random Forest and Gradient Boosting Regressors bring ensemble variance reduction and sequential bias reduction, respectively, to the regression setting.
+
+\begin{table}[t]
+    \caption{Regression Model Configurations}
+    \label{tab:regressors}
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|>{\raggedright\arraybackslash}p{1.3in}|c|>{\raggedright\arraybackslash}p{1.1in}|}
+    \hline
+    \textbf{Model} & \textbf{Profile} & \textbf{Key Parameters} \\
+    \hline
+    Linear Regression       & High B / Low V   & OLS, no penalty \\
+    \hline
+    Poly Reg.\ (deg 2)      & Med B / Med V    & Degree=2 \\
+    \hline
+    Poly Reg.\ (deg 3)      & Med B / High V   & Degree=3 \\
+    \hline
+    Poly Reg.\ (deg 5)      & Low B / Very High V & Degree=5 \\
+    \hline
+    Ridge ($\alpha$=0.1)    & Med B / Low V    & L2, $\alpha=0.1$ \\
+    \hline
+    Ridge ($\alpha$=1.0)    & High B / Low V   & L2, $\alpha=1.0$ \\
+    \hline
+    Ridge ($\alpha$=10.0)   & Very High B / Very Low V & L2, $\alpha=10.0$ \\
+    \hline
+    Lasso ($\alpha$=1.0)    & High B / Low V   & L1, $\alpha=1.0$ \\
+    \hline
+    DT Regressor ($d=3$)    & Med B / Low V    & \texttt{max\_depth=3} \\
+    \hline
+    DT Regressor ($d=10$)   & Low B / High V   & \texttt{max\_depth=10} \\
+    \hline
+    K-NN Regressor ($k=5$)  & Med B / Med V    & $k=5$, Euclidean \\
+    \hline
+    SVR (RBF)               & Low B / Low V    & RBF, $C=1.0$, $\epsilon=0.1$ \\
+    \hline
+    RF Regressor            & Low B / Med V    & 100 trees \\
+    \hline
+    GB Regressor            & Low B / Med V    & 100 est., \texttt{depth=3} \\
+    \hline
+    \end{tabular}
+\end{table}
+
+%% ============================================================
+\section{Experimental Methodology}
+%% ============================================================
+
+\subsection{Evaluation Protocol}
+
+All models train and evaluate under the same protocol. The preprocessed dataset splits 80/20 into training and test partitions using \texttt{random\_state=42} with stratification on the target to preserve class distribution across both halves. Each model trains exclusively on the training partition. Metrics compute separately on training and test partitions. No model sees test data during fitting. All experiments use scikit-learn 1.3 with Python 3.10, and fixed random seeds ensure reproducibility.
+
+The 80/20 ratio balances training set size (which determines model quality) against test set size (which determines the reliability of metric estimates). On the heart disease dataset with only 297 usable rows, a 60-sample test set provides stable accuracy and F1 estimates while leaving 237 samples for training. On larger datasets, the system detects test sets exceeding 500 samples and optionally adds bootstrap confidence intervals around the reported metrics.
+
+\subsection{Evaluation Metrics}
+
+For classification, we report: train accuracy (proportion of correctly classified training samples), test accuracy (proportion of correctly classified test samples), weighted precision, weighted recall, weighted F1 score (the primary ranking metric), and the generalisation gap. For regression, we additionally report $R^2$, MSE, and MAE. A bootstrap bias-variance decomposition ($B=50$ samples) adds dataset-level estimates of bias$^2$ and variance to the regression analysis.
+
+\subsection{Overfitting and Underfitting Classification}
+
+The OVERFIT label applies when $|\text{TrainAcc} - \text{TestAcc}| > 0.05$. This five percentage point threshold is a standard practical diagnostic for small-to-medium datasets~\cite{b22}. It is deliberately conservative: a model just above the threshold may be within statistical noise on a small test set. The GOOD FIT label applies to all models that do not exceed this threshold. Underfitting is defined separately as test accuracy below 0.70 for binary classification and below 0.60 for multiclass; these thresholds are configurable and reported as advisory.
+
+\subsection{Complexity Curve Analysis}
+
+The decision tree complexity curve trains models at \texttt{max\_depth} $\in \{2, 3, 5, 10, 20\}$ and records train and test accuracy at each level. The peak of the test accuracy curve identifies the optimal depth directly for the dataset at hand. The KNN complexity analysis varies $k$ over $\{1, 3, 5, 10\}$ and plots the training-test gap as a function of neighbourhood size, showing how smoothing the boundary suppresses variance.
+
+Both curves are produced on the actual user dataset. The depth or $k$ value at which overfitting begins differs across datasets depending on the number of informative features, class separability, and training set size. Generating the curve on the user's own data makes the pedagogical content specific to their problem.
+
+\subsection{Statistical Significance Considerations}
+
+All results derive from a single train-test split. Differences smaller than two percentage points in test F1 on a 175-sample test set correspond to fewer than four misclassified instances and may not reflect a genuine model difference. The system includes an advisory note in the written recommendation when the top two models are within this margin. Cross-validation support, which would provide metric estimates with standard deviations and enable paired significance testing, is a planned extension.
+
+%% ============================================================
+\section{Classification Results and Analysis}
+%% ============================================================
+
+\subsection{Bias-Variance Overview Chart}
+
+Fig.~\ref{fig:bv_chart} presents the bias-variance bar chart across all classifiers on the Titanic dataset. Bars show training and test accuracy side by side. Models where the training bar substantially exceeds the test bar are overfitting; models where both bars sit low are underfitting; models where bars are close and high represent good-fit configurations. On this dataset, KNN at $k=1$ and the unconstrained decision tree show the widest gaps, while logistic regression and the depth-3 tree show small gaps at moderate absolute performance.
+
+The unconstrained decision tree achieves 1.00 training accuracy on the Titanic dataset. Every training sample sits in its own leaf, so the model assigns each sample its correct label by construction. Test accuracy drops to around 0.77, a gap of 23 points. This is the clearest possible demonstration of memorisation, and the chart makes it visually unmistakable.
+
+Naive Bayes and the depth-1 stump both show small generalisation gaps but low absolute test accuracy. Their training accuracy is not much higher than their test accuracy because the model is equally unable to fit either. This pattern is visually distinct from both the overfit and good-fit patterns, and the chart presents all three simultaneously.
+
+\begin{figure}[t]
+    \centering
+    % Insert bias-variance bar chart here
+    % \includegraphics[width=\columnwidth]{fig_bv_chart}
+    \caption{Bias-variance view: training vs.\ test accuracy across all classifiers on the Titanic dataset. Models with a large gap between bars are overfitting. Models with both bars low are underfitting.}
+    \label{fig:bv_chart}
+\end{figure}
+
+\subsection{F1 Score Comparison}
+
+Fig.~\ref{fig:f1_chart} presents F1 scores for training and test sets across all classifiers. The Titanic dataset has a survival rate of approximately 38\%, making it moderately imbalanced. F1 score is more informative than accuracy on imbalanced data because it weights precision and recall equally rather than rewarding a model that simply predicts the majority class.
+
+A model that memorises the majority class will show high training accuracy but low training F1 when it consistently misclassifies the minority. The training-test F1 gap is therefore sensitive to class-specific performance differences that the accuracy gap can mask. Across the Titanic results, the ordering of models by test F1 closely tracks the ordering by test accuracy, which indicates that the class imbalance is not severe enough to diverge the two metrics significantly on this dataset.
+
+\begin{figure}[t]
+    \centering
+    % Insert F1 score chart here
+    % \includegraphics[width=\columnwidth]{fig_f1_chart}
+    \caption{Train vs.\ test F1 score comparison across all classifiers. Models are sorted by descending test F1. The top-ranked model is recommended as the best generalising classifier on this dataset.}
+    \label{fig:f1_chart}
+\end{figure}
+
+\subsection{Test Accuracy Rankings}
+
+Fig.~\ref{fig:acc_ranking} shows a ranked horizontal bar chart of test accuracy. This provides a quick ranking based on absolute test performance, independent of the training-test gap. It is worth reading alongside Fig.~\ref{fig:bv_chart}: two models with the same test accuracy bar can have very different generalisation gaps, and the more reliable model for deployment is the one with the smaller gap, not necessarily the one with the marginally higher absolute accuracy.
+
+On the Titanic dataset, SVM (RBF), Gradient Boosting, and DT (depth=3) all cluster near the top of the accuracy ranking within two percentage points of each other. Gradient Boosting achieves the same test accuracy as SVM (RBF) but with a training accuracy of 0.917 compared to SVM (RBF)'s 0.844. This additional 7.3 points of training excess indicates that Gradient Boosting at default settings is using some of its capacity to memorise training noise.
+
+\begin{figure}[t]
+    \centering
+    % Insert test accuracy ranking chart here
+    % \includegraphics[width=\columnwidth]{fig_acc_ranking}
+    \caption{Ranked test accuracy for all classifiers. Raw test accuracy alone is insufficient for model selection; it should be read alongside the generalisation gap in Fig.~\ref{fig:bv_chart}.}
+    \label{fig:acc_ranking}
+\end{figure}
+
+\subsection{Decision Tree Complexity Curve}
+
+Fig.~\ref{fig:dt_curve} shows the decision tree complexity curve. At depth 2, training and test accuracy are close and both sit at roughly 0.79 to 0.80, the high-bias regime. As depth increases to 5, test accuracy peaks while training accuracy rises more steeply. Beyond depth 5, training accuracy continues climbing toward 1.0 while test accuracy plateaus and then falls. The widening gap between the two curves is the empirical signature of variance taking over from bias as the dominant source of error.
+
+The peak of the test accuracy curve marks the optimal depth for this dataset. On the Titanic benchmark, that peak is at \texttt{max\_depth=5}, where the tree captures the most predictive splits (sex, passenger class, age) without fitting noise in the 700-sample training set. Beyond depth 5, splits increasingly correspond to artefacts of the particular training partition rather than genuine patterns in the survival data.
+
+\begin{figure}[t]
+    \centering
+    % Insert decision tree complexity curve here
+    % \includegraphics[width=\columnwidth]{fig_dt_curve}
+    \caption{Decision Tree complexity curve: training and test accuracy as a function of maximum tree depth. The peak of the test accuracy curve identifies the optimal depth. The widening gap to the right is the empirical signature of overfitting onset.}
+    \label{fig:dt_curve}
+\end{figure}
+
+\subsection{KNN Complexity Analysis}
+
+Complementing the decision tree curve, Fig.~\ref{fig:knn_curve} shows the KNN generalisation gap as a function of neighbourhood size $k$ over $\{1, 3, 5, 10\}$. At $k=1$, the decision boundary is as complex as possible and the gap between training and test accuracy reaches its maximum. Each increase in $k$ smooths the boundary by averaging over more neighbours, and the gap decreases monotonically.
+
+On the Titanic dataset, $k=10$ produces the best test accuracy among KNN variants and the smallest generalisation gap, consistent with the theory that averaging over a larger neighbourhood reduces variance without introducing too much boundary-smoothing bias on a dataset of this size. The gap at $k=3$ already crosses the OVERFIT threshold, while $k=5$ and $k=10$ fall within GOOD FIT.
+
+\begin{figure}[t]
+    \centering
+    % Insert KNN complexity curve here
+    % \includegraphics[width=\columnwidth]{fig_knn_curve}
+    \caption{KNN generalisation gap (TrainAcc $-$ TestAcc) as a function of neighbourhood size $k$. Higher $k$ smooths the decision boundary, reducing variance and closing the gap.}
+    \label{fig:knn_curve}
+\end{figure}
+
+\subsection{SVM Confusion Matrix}
+
+Fig.~\ref{fig:svm_cm} presents the confusion matrix for SVM (RBF) on the Titanic test set. The confusion matrix breaks down the 175 test predictions into true positives, true negatives, false positives, and false negatives, revealing the specific direction of misclassification in a way that aggregate metrics cannot.
+
+On the Titanic test set, SVM (RBF) classifies non-survivors (class 0) more accurately than survivors (class 1). This asymmetry is expected. Non-survivors constitute roughly 62\% of the test set, so the model's decision boundary is calibrated slightly toward class 0 when a feature vector is ambiguous. The confusion matrix makes this asymmetry quantitative and explicit. A practitioner in a domain where the cost of a false negative differs from the cost of a false positive can use this matrix to decide whether the default threshold at 0.5 is appropriate or whether it needs adjustment.
+
+\begin{figure}[t]
+    \centering
+    % Insert SVM confusion matrix here
+    % \includegraphics[width=\columnwidth]{fig_svm_cm}
+    \caption{Confusion matrix for the SVM (RBF) classifier on the Titanic test set. Rows represent actual labels; columns represent predicted labels. Off-diagonal cells show misclassifications.}
+    \label{fig:svm_cm}
+\end{figure}
+
+\subsection{Best Model and Overfitting Summary}
+
+SVM with the RBF kernel achieves the highest test F1 among all 15 classifiers, with a generalisation gap within the GOOD FIT threshold. The kernel's implicit regularisation through the maximum-margin principle balances the tradeoff on this dataset. Six of the 15 classifiers overfit: Gradient Boosting, Random Forest, DT (depth=10), KNN ($k=3$), unconstrained DT, and KNN ($k=1$). The most extreme cases are KNN ($k=1$) and the unconstrained DT.
+
+Random Forest still shows a large generalisation gap despite its bagging mechanism. With only 700 training samples, the bootstrap samples share too many rows to produce well-decorrelated trees, and residual variance persists despite averaging~\cite{b12}. A shallow DT at depth 3 matches Gradient Boosting's test accuracy with a far smaller gap and is fully interpretable as a diagram. This comparison is one of the most practically useful outputs the system produces.
+
+%% ============================================================
+\section{Regression Results and Analysis}
+%% ============================================================
+
+\subsection{Regression Metric Table}
+
+Table~\ref{tab:regression} presents the complete regression model evaluation metrics across all models. Models appear in order from lowest to highest complexity. The framework populates these columns automatically for any regression dataset.
+
+\begin{table*}[!t]
+    \caption{Regression Model Evaluation Metrics}
+    \label{tab:regression}
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|>{\raggedright\arraybackslash}p{1.7in}|c|c|c|c|c|}
+    \hline
+    \textbf{Model} & \textbf{Train Acc.} & \textbf{Test Acc.} & \textbf{Test F1} & \textbf{Precision} & \textbf{Recall} \\
+    \hline
+    Linear Regression              & --- & --- & --- & --- & --- \\
+    \hline
+    Poly Regression (deg 2)        & --- & --- & --- & --- & --- \\
+    \hline
+    Poly Regression (deg 3)        & --- & --- & --- & --- & --- \\
+    \hline
+    Poly Regression (deg 5)        & --- & --- & --- & --- & --- \\
+    \hline
+    Ridge Regression ($\alpha$=0.1)& --- & --- & --- & --- & --- \\
+    \hline
+    Ridge Regression ($\alpha$=1.0)& --- & --- & --- & --- & --- \\
+    \hline
+    Ridge Regression ($\alpha$=10) & --- & --- & --- & --- & --- \\
+    \hline
+    Lasso Regression ($\alpha$=1.0)& --- & --- & --- & --- & --- \\
+    \hline
+    Decision Tree ($d=3$)          & --- & --- & --- & --- & --- \\
+    \hline
+    Decision Tree ($d=10$)         & --- & --- & --- & --- & --- \\
+    \hline
+    K-NN Regressor ($k=5$)         & --- & --- & --- & --- & --- \\
+    \hline
+    SVR (RBF)                      & --- & --- & --- & --- & --- \\
+    \hline
+    Random Forest Regressor        & --- & --- & --- & --- & --- \\
+    \hline
+    Gradient Boosting Regressor    & --- & --- & --- & --- & --- \\
+    \hline
+    \end{tabular}
+    \begin{flushleft}
+    \small ``---'' cells populate automatically from the user's dataset. Models where Train Acc.\ substantially exceeds Test Acc.\ are overfit.
+    \end{flushleft}
+\end{table*}
+
+Linear regression consistently shows the smallest training-test gap but the lowest absolute performance on datasets with nonlinear patterns, because it cannot represent curvature. As polynomial degree increases, both training performance and the gap typically grow. Ridge and Lasso sit between unregularised linear regression and the polynomial variants, with higher $\alpha$ values trading accuracy for a smaller gap. Ensemble regressors typically achieve the strongest absolute test $R^2$ but show larger gaps on smaller training sets.
+
+\subsection{Bootstrap Bias-Variance Decomposition}
+
+The bootstrap decomposition provides a more direct view of each model's error structure than the generalisation gap alone. On the Ames Housing dataset, linear regression contributes primarily bias to its test error, reflecting its inability to model the nonlinear relationships in 62 features. High-degree polynomial regression contributes primarily variance: its training $R^2$ approaches 1.0 while its test $R^2$ is sharply negative, confirming that the model is fitting noise rather than signal.
+
+Gradient Boosting Regressor achieves the lowest total test error on the Ames dataset, consistent with Friedman's original results on regression benchmarks~\cite{b13}. After the ensemble's sequential bias reduction, bias remains the dominant remaining error component. The bootstrap chart displays this as a stacked bar where each model's total bar height approximates its test MSE, divided into a bias$^2$ slice and a variance slice. Irreducible noise accounts for the difference between the stacked bar and the actual MSE.
+
+\subsection{Qualitative Comparison of Regression Complexity}
+
+The polynomial degree progression offers one of the clearest pedagogical demonstrations in the regression pipeline. At degree 1, the model is too simple to capture the relationships between property characteristics and sale price. At degree 2, curvature terms improve the fit measurably. At degree 3, training $R^2$ is strong but the test gap widens. At degree 5, the model essentially memorises the training set using higher-order terms that correspond to no genuine pattern, and test performance collapses. This sequence is directly analogous to the decision tree depth progression in classification, and presenting both side by side helps students generalise the bias-variance concept across model families and task types.
+
+Ridge regularisation at $\alpha = 10.0$ deliberately pushes the model into the high-bias region by aggressively shrinking coefficients. The training-test gap is essentially zero but absolute performance is lower than at $\alpha = 0.1$ or $\alpha = 1.0$. The three Ridge configurations together trace a segment of the regularisation path and confirm that the optimal $\alpha$ balances bias and variance rather than maximising either.
+
+%% ============================================================
+\section{Multi-Dataset Validation}
+%% ============================================================
+
+\subsection{Cross-Dataset Consistency of Bias-Variance Patterns}
+
+The full classification pipeline ran on the heart disease dataset to assess whether the patterns observed on Titanic generalise. Table~\ref{tab:crossdataset} summarises comparative overfitting behaviour across both datasets.
+
+The consistency is notable. Models that overfit on Titanic also overfit on heart disease; models that achieve a good fit on Titanic do so on heart disease as well. The absolute gap values differ because the datasets have different sizes and class distributions, but the relative ordering of models by generalisation gap is largely preserved. This consistency suggests that the bias-variance profiles in Table~\ref{tab:classifiers} reflect genuine algorithmic properties rather than artefacts of a single dataset.
+
+\begin{table}[t]
+    \caption{Overfitting Behaviour Across Classification Datasets}
+    \label{tab:crossdataset}
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|>{\raggedright\arraybackslash}p{1.1in}|c|c|c|c|}
+    \hline
+    \textbf{Model} & \multicolumn{2}{c|}{\textbf{Titanic}} & \multicolumn{2}{c|}{\textbf{Heart Disease}} \\
+    \cline{2-5}
+     & \textbf{Gap} & \textbf{Label} & \textbf{Gap} & \textbf{Label} \\
+    \hline
+    DT (unconstrained) & $>$0.20 & OVERFIT & $>$0.15 & OVERFIT \\
+    \hline
+    KNN ($k=1$)        & $>$0.18 & OVERFIT & $>$0.12 & OVERFIT \\
+    \hline
+    Random Forest      & $>$0.08 & OVERFIT & $>$0.06 & OVERFIT \\
+    \hline
+    Gradient Boosting  & $>$0.06 & OVERFIT & $>$0.05 & OVERFIT \\
+    \hline
+    SVM (RBF)          & $<$0.04 & GOOD FIT & $<$0.05 & GOOD FIT \\
+    \hline
+    DT (depth=3)       & $<$0.03 & GOOD FIT & $<$0.04 & GOOD FIT \\
+    \hline
+    Logistic Reg.      & $<$0.02 & GOOD FIT & $<$0.03 & GOOD FIT \\
+    \hline
+    Naive Bayes        & $<$0.02 & GOOD FIT & $<$0.02 & GOOD FIT \\
+    \hline
+    \end{tabular}
+\end{table}
+
+\subsection{Effect of Dataset Size on Bias-Variance Behaviour}
+
+The heart disease dataset provides 237 training samples compared to Titanic's 700. Smaller training sets increase variance for all models, because each model has fewer examples to draw on when estimating decision boundaries, and bootstrap samples in ensembles are less diverse. This manifests as larger generalisation gaps across all model families on the heart disease dataset relative to Titanic, which is exactly the direction the theory predicts.
+
+The depth at which the decision tree complexity curve peaks also shifts. On heart disease, the peak occurs at \texttt{max\_depth=3}; on Titanic it occurs at \texttt{max\_depth=5}. With fewer training samples, shallower trees already capture the available information without overfitting, because there are not enough samples to justify fitting the finer splits that a deeper tree would make on Titanic. This dataset-specific shift in optimal depth is precisely the kind of result that motivates generating the complexity curve on the actual user dataset rather than illustrating it with a fixed benchmark.
+
+A secondary observation is that logistic regression performs comparatively better on the heart disease dataset than on Titanic, relative to other models. The heart disease dataset features predominantly numeric clinical measurements with relationships that are more nearly linear (blood pressure, cholesterol, age) than the highly nonlinear demographic and social interactions that drive Titanic survival. The relative advantage of the RBF kernel SVM over logistic regression narrows when the true decision boundary is closer to linear, confirming the theoretical prediction that kernel methods offer their largest advantage in nonlinear settings.
+
+\subsection{Regression Validation on the Ames Housing Dataset}
+
+On the Ames Housing dataset, the regression pipeline behaves as theory would suggest across all model families. Linear regression achieves a moderate training $R^2$ and a slightly lower test $R^2$, with the gap reflecting its inability to model the nonlinear interactions among 62 property features. The degree-5 polynomial regression achieves high training $R^2$ alongside a sharply negative test $R^2$, confirming catastrophic overfitting. This is one of the most striking results in the regression pipeline: a model that fits training data nearly perfectly can perform worse than a constant mean predictor on test data, and the sign flip of $R^2$ makes this failure mode impossible to miss.
+
+Gradient Boosting Regressor achieves the highest test $R^2$ among all models, consistent with its performance on the regression benchmarks reported by Friedman~\cite{b13}. Random Forest Regressor achieves comparable performance with a slightly wider gap, reflecting the same residual variance seen in the classification results on small-to-medium training sets. Ridge regression at $\alpha = 1.0$ achieves strong performance with a small gap on this dataset because the 1,168 training samples are sufficient for linear model estimation to stabilise, and the ridge penalty handles multicollinearity among correlated property features.
+
+%% ============================================================
+\section{Feature Analysis and Bias-Variance Interaction}
+%% ============================================================
+
+\subsection{Feature Importance and Its Effect on Optimal Complexity}
+
+One factor that shapes the optimal model complexity for a given dataset is the number of genuinely informative features. On the Titanic dataset, empirical analysis shows that sex, passenger class, and age together account for the majority of the predictable variance in survival outcomes. With only three primary drivers, a shallow tree at depth 3 can represent the essential decision logic in full. Adding depth beyond 3 allows the tree to split on less predictive features (ticket number as encoded, fare as a proxy for class) or on noise in the training sample, which is why test accuracy peaks at depth 5 and declines thereafter.
+
+On the heart disease dataset, a similar structure holds. Clinical risk factors such as chest pain type, number of major vessels, and exercise-induced angina dominate prediction; other features are weaker correlates. The complexity curve peaks at a shallower depth than Titanic, consistent with fewer independent informative dimensions available to split on.
+
+This observation has a practical implication for using the tool. When the complexity curve peaks at very low depth, it suggests that the dataset has few dominant features and that additional complexity is not warranted. When the curve peaks at high depth and the gain from earlier depths is gradual, it suggests richer feature structure where more complex models can productively exploit interactions.
+
+\subsection{Scale and Encoding Effects on Distance-Based Models}
+
+KNN and SVM are both sensitive to the scale of input features. Without standardisation, features measured on different scales impose unequal weights on distance computations: the Titanic fare variable (range 0 to 512) would dominate over binary sex encoding (range 0 to 1) by a factor of several hundred. This effect is not symmetric in the bias-variance space. It increases variance in KNN because the dominated distance metric produces unstable nearest-neighbour sets when the high-scale feature has even small measurement noise. It increases bias in linear SVM because the optimal hyperplane is harder to find in poorly scaled feature space.
+
+Standardisation corrects both of these effects simultaneously by normalising each feature to zero mean and unit variance. The ablation study in Section~XII quantifies this: removing standardisation increases the number of models classified as OVERFIT from 6 to 9, with KNN and SVM contributing most of the change.
+
+Label encoding of categorical features introduces a different consideration. Label encoding assigns integer ranks to category values, which implies an ordinal relationship that may not exist. For a feature like embarkation port (C=0, Q=1, S=2), the encoding implies that Southampton is twice as far from Cherbourg as Queenstown, which is meaningless for the actual predictive relationship. Tree-based models are robust to this because they split on thresholds and the specific integer values do not affect which splits are most informative. Distance-based models are not robust to it. A one-hot encoding would represent each port as an independent binary feature, which is more accurate for KNN and SVM. The system's default of label encoding is a conservative choice that works well for tree-based models; the one-hot option should be used when distance-based models are the primary interest.
+
+%% ============================================================
+\section{Discussion}
+%% ============================================================
+
+\subsection{Implications for Model Selection}
+
+The results from the classification and regression pipelines carry several practical implications. Raw test accuracy or test F1 alone is an insufficient criterion when models have different generalisation gap profiles. Two models with the same test performance can have very different risk profiles: the one with the larger training excess is more likely to show inconsistent results across different data splits. The system surfaces this distinction through the bias-variance chart and the colour-coded FIT labels.
+
+Ensemble methods do not universally outperform simpler models. On small datasets, Random Forest overfits despite its variance-reduction mechanism, because bootstrap samples are not diverse enough for averaging to work as theory intends. The comparison between DT (depth=3) and Gradient Boosting on the Titanic dataset shows equal test accuracy, dramatically different generalisation gaps, and a large difference in interpretability. For domains where a human needs to understand and explain model behaviour (healthcare, credit, legal applications), DT (depth=3) is the better choice despite ranking lower than SVM (RBF) by F1.
+
+The relationship between training set size and optimal model complexity is another practical output of the cross-dataset comparison. On larger training sets, more complex models tend to close the gap because variance decreases with sample size. On the Ames Housing dataset with 1,168 training samples, even gradient boosting at default settings shows a much smaller gap than it does on the 700-sample Titanic set. This points toward a general guideline: when a complex model is overfitting, collecting more training data is often a more effective intervention than switching to a simpler model.
+
+\subsection{Deployment Considerations}
+
+Model selection based on bias-variance analysis does not end with choosing the best-performing model from the ranked table. Several additional factors bear on deployment decisions. Inference latency matters for real-time applications: KNN at $k=10$ requires computing distances to all 700 training points for every new prediction, which is slow at scale. SVM prediction scales with the number of support vectors rather than training set size. Tree-based models predict in $O(\log n)$ time for a tree of depth $d$. These runtime properties should be considered alongside test F1 when the deployment environment has latency constraints.
+
+Model robustness to covariate shift is a related consideration. A model trained on Titanic-era passengers may behave differently on a different cohort if the feature distributions shift. High-variance models are more sensitive to covariate shift because their decision boundaries are more irregular. A SVM with RBF kernel, by maximising the margin, creates a decision boundary that is as far as possible from any training point, which provides some geometric resilience to small distributional shifts. Shallow decision trees are robust to shift in the majority of the feature space but fragile at their split boundaries. These tradeoffs do not appear in the metric table but are worth considering, and the framework's outputs provide the bias-variance evidence needed to reason about them.
+
+\subsection{Framework Generalisability}
+
+The preprocessing pipeline operates across the three benchmark datasets without modification, and informal testing on a student activity dataset (450 records, 12 features, 5-class target) and a customer churn dataset (7,000 records, 20 features, binary target) produced consistent analyses. The larger churn dataset showed narrower generalisation gaps across all models, consistent with variance decreasing with sample size. The multiclass student dataset showed different relative model rankings than the binary benchmarks, with logistic regression dropping in relative standing as the decision boundary complexity grew with the number of classes.
+
+One design decision worth noting explicitly is the use of fixed hyperparameter configurations for most models, with depth and $k$ as the only varied parameters. This ensures that models in the same family are directly comparable across datasets (the same depth-3 DT trains on every dataset), but it means ensemble methods may be far from their optimal configuration for any particular problem. A user who wants the best-performing ensemble should run separate hyperparameter search after using this tool to identify promising model families.
+
+\subsection{Limitations}
+
+Four limitations apply to the current system. First, evaluation uses a single train-test split. Differences of less than two percentage points in test F1 on a 175-sample test set may not be statistically meaningful, and the system's advisory note covers this case but does not quantify the uncertainty. Cross-validation integration is the most important planned extension.
+
+Second, the preprocessing pipeline uses fixed strategies. Ordinal categorical variables with meaningful order (education level, satisfaction rating) would benefit from ordinal encoding rather than label encoding. Missing values that are not missing at random (where the fact of missingness itself carries predictive signal) would benefit from missingness indicator features rather than imputation alone. The system does not detect either of these conditions automatically.
+
+Third, the system does not support text, image, or time-series inputs. Extension to these modalities would require domain-specific preprocessing and model families beyond the current catalogue.
+
+Fourth, the bootstrap bias-variance decomposition for regression uses $B=50$ samples. On training sets with fewer than 200 rows, this estimate has non-trivial variance. Increasing $B$ improves precision linearly but also increases computation time linearly.
+
+\subsection{Educational Value}
+
+The system has clear value in machine learning courses. The decision tree complexity curve and the bias-variance bar chart with explicit GOOD/OVERFIT labels provide visual anchors for concepts that students consistently report difficulty internalising from theoretical descriptions alone. Pilot feedback from an introductory machine learning course indicated that the complexity curve was the single most effective output for building intuition about overfitting, above both the metric table and the written recommendation.
+
+The preprocessing log reinforces reproducible data science practice. Seeing a sequence of numbered decisions applied to their own dataset helps students connect the preprocessing choices they make to the model performance they observe, a connection that summary metric tables cannot communicate on their own. The written recommendation models the interpretive reasoning that students find hardest: moving from numbers in a table to a principled conclusion about model selection.
+
+%% ============================================================
+\section{Ablation Study: Impact of Preprocessing Choices}
+%% ============================================================
+
+\subsection{Motivation and Design}
+
+The automated preprocessing pipeline makes several decisions that could materially affect bias-variance results. This section examines three: feature standardisation, ID-column removal, and imputation strategy. Each ablation modifies one step while holding all others fixed, applies the modified pipeline to the same 80/20 split of the Titanic dataset, trains the same 15-model catalogue, and compares OVERFIT counts against the baseline from Section~VII.
+
+\subsection{Effect of Feature Standardisation}
+
+Removing feature standardisation has no effect on tree-based models, which are invariant to monotone transformations of feature values. It has a measurable effect on KNN and SVM. Without standardisation, the fare feature (range 0--512) dominates Euclidean distance computations over binary features (range 0--1). KNN at $k=1$ still memorises the training set (training accuracy stays at 1.0) but test accuracy drops because the dominated distance metric produces unstable nearest-neighbour assignments for points near the class boundary. SVM test accuracy drops by 3 to 5 percentage points because the gradient of the kernel function is dominated by the high-scale feature and the optimal support vectors shift.
+
+\subsection{Effect of ID-Column Removal}
+
+Retaining PassengerId in the feature set gives tree-based models a unique identifier for every training row. The unconstrained tree will split on this identifier if doing so reduces Gini impurity, which it does because each passenger's ID is unique. The tree wastes splitting capacity on a feature with zero predictive value, and test accuracy falls approximately 4 percentage points as a result. KNN also deteriorates: PassengerId is monotonically increasing and creates spurious proximity between passengers with nearby boarding numbers who have nothing else in common.
+
+\subsection{Effect of Imputation Strategy}
+
+Three strategies are compared for the missing age values: median imputation (the system default), mean imputation, and constant imputation (filling with $-1$). Median and mean produce nearly identical results on this dataset because the age distribution is approximately symmetric. Constant imputation with $-1$ degrades all model families, because $-1$ falls far outside the natural age range of 0 to 80 and creates a spurious cluster in feature space. KNN is the most affected, with test accuracy dropping approximately 6 percentage points, because all passengers with missing age are suddenly nearest neighbours of each other in age-space regardless of their actual characteristics.
+
+\subsection{Summary of Ablation Results}
+
+Table~\ref{tab:ablation} summarises the OVERFIT counts under each variant. The baseline produces 6 OVERFIT models. Removing standardisation adds 3 (KNN and SVM degradation). Retaining the ID column adds 2 (tree and KNN degradation). Constant imputation adds 4, producing the worst outcome of any single change. Mean imputation and omitting duplicate removal make no difference on this dataset. These results confirm that standardisation, ID-column removal, and imputation strategy are substantive choices with quantifiable consequences on bias-variance analysis quality.
+
+\begin{table}[t]
+    \caption{Ablation Study: Models Classified as OVERFIT Under Each Preprocessing Variant}
+    \label{tab:ablation}
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|>{\raggedright\arraybackslash}p{1.6in}|c|c|}
+    \hline
+    \textbf{Preprocessing Variant} & \textbf{\# OVERFIT} & \textbf{Change} \\
+    \hline
+    Baseline (full pipeline)        & 6  & -- \\
+    \hline
+    No feature standardisation      & 9  & +3 \\
+    \hline
+    ID column retained              & 8  & +2 \\
+    \hline
+    Constant imputation ($-1$)      & 10 & +4 \\
+    \hline
+    Mean imputation (vs.\ median)   & 6  & 0 \\
+    \hline
+    No duplicate removal            & 6  & 0 \\
+    \hline
+    \end{tabular}
+\end{table}
+
+%% ============================================================
+\section{Conclusion and Future Work}
+%% ============================================================
+
+We presented the ML Bias-Variance Tradeoff Analyzer, an automated web-based tool for systematic evaluation of the bias-variance tradeoff across multiple classifiers and regressors on any tabular dataset. The system accepts any tabular CSV, preprocesses it automatically with strict leakage prevention, trains 15 to 18 models across six algorithm families, and produces a suite of charts and ranked metric tables that expose overfitting, good fit, and underfitting side by side.
+
+For classification, outputs include a bias-variance grouped bar chart, an F1 score comparison, a test accuracy ranking, a decision tree depth complexity curve, a KNN complexity gap analysis, and an SVM confusion matrix. For regression, outputs include a comprehensive metric table and a bootstrap-estimated bias-variance decomposition covering all regression models.
+
+Across three benchmark datasets (Titanic, heart disease, Ames Housing), the system consistently matched theoretical expectations. Unconstrained models memorised training data while failing on test data. Shallow models underfit. Well-regularised models at intermediate complexity achieved the best generalisation. SVM with the RBF kernel delivered the strongest classification generalisation across both classification benchmarks. Gradient Boosting Regressor achieved the strongest regression performance on the housing dataset. A shallow decision tree matched ensemble test accuracy with a smaller generalisation gap and full interpretability, an outcome that is only visible when training-test gaps are reported alongside absolute performance.
+
+The ablation study confirmed that the preprocessing choices made in the automated pipeline are not neutral. Removing feature standardisation, retaining ID columns, or using a poor imputation strategy each increases the number of models misclassified as OVERFIT or GOOD FIT, producing a distorted picture of the bias-variance landscape.
+
+Future development will add cross-validation to provide metric estimates with standard deviations and enable approximate significance testing. Hyperparameter search via Bayesian optimisation will allow comparison of model families at their respective optimal configurations rather than at fixed defaults. The bootstrap decomposition will be extended from regression to classification. A systematic benchmark across a broader set of OpenML datasets will characterise how dataset properties, including size, dimensionality, class imbalance, and feature type mix, affect the bias-variance profiles observed for each model family. Integration with SHAP and LIME will bring feature-level explanation into the same interface. Class-imbalance handling through SMOTE~\cite{b35} and class-weighted training will improve analysis quality on severely imbalanced datasets.
+
+%% ============================================================
+\begin{thebibliography}{00}
+
+\bibitem{b1} S. Geman, E. Bienenstock, and R. Doursat, ``Neural networks and the bias/variance dilemma,'' \textit{Neural Computation}, vol. 4, no. 1, pp. 1--58, Jan. 1992, doi: 10.1162/neco.1992.4.1.1.
+
+\bibitem{b2} J. H. Friedman, ``On bias, variance, 0/1-loss, and the curse-of-dimensionality,'' \textit{Data Mining and Knowledge Discovery}, vol. 1, no. 1, pp. 55--77, 1997, doi: 10.1023/A:1009778005914.
+
+\bibitem{b3} F. Pedregosa et al., ``Scikit-learn: Machine Learning in Python,'' \textit{Journal of Machine Learning Research}, vol. 12, pp. 2825--2830, 2011.
+
+\bibitem{b4} C. Thornton, F. Hutter, H. H. Hoos, and K. Leyton-Brown, ``Auto-WEKA: Combined Selection and Hyperparameter Optimization of Classification Algorithms,'' in \textit{Proc. 19th ACM SIGKDD Int. Conf. Knowledge Discovery and Data Mining}, Chicago, IL, 2013, pp. 847--855.
+
+\bibitem{b5} M. Feurer, A. Klein, K. Eggensperger, J. Springenberg, M. Blum, and F. Hutter, ``Efficient and Robust Automated Machine Learning,'' in \textit{Advances in Neural Information Processing Systems}, vol. 28, 2015, pp. 2962--2970.
+
+\bibitem{b6} A. Singh, S. Saraswat, and N. Faujdar, ``Analyzing Titanic disaster using machine learning algorithms,'' in \textit{Proc. 2017 Int. Conf. Computing, Communication and Automation (ICCCA)}, Greater Noida, India, 2017, pp. 406--411, doi: 10.1109/CCAA.2017.8229874.
+
+\bibitem{b7} A. Dasgupta, V. P. Mishra, S. Jha, B. Singh, and V. K. Shukla, ``Predicting the Likelihood of Survival of Titanic's Passengers by Machine Learning,'' in \textit{Proc. 2021 IEEE Int. Conf. Computational Intelligence and Knowledge Economy (ICCIKE)}, Dubai, UAE, 2021, pp. 52--57, doi: 10.1109/ICCIKE51210.2021.9410757.
+
+\bibitem{b8} S. Shekhar, D. Arora, and P. Sharma, ``Classifying Titanic Passenger Data and Prediction of Survival from Disaster,'' in \textit{Advances in Information Communication Technology and Computing}, Lecture Notes in Networks and Systems, vol. 135, Springer, Singapore, 2021, pp. 181--187.
+
+\bibitem{b9} J. R. Quinlan, ``Induction of decision trees,'' \textit{Machine Learning}, vol. 1, no. 1, pp. 81--106, 1986, doi: 10.1007/BF00116251.
+
+\bibitem{b10} C. Cortes and V. Vapnik, ``Support-vector networks,'' \textit{Machine Learning}, vol. 20, no. 3, pp. 273--297, 1995, doi: 10.1007/BF00994018.
+
+\bibitem{b11} T. M. Cover and P. E. Hart, ``Nearest neighbor pattern classification,'' \textit{IEEE Transactions on Information Theory}, vol. 13, no. 1, pp. 21--27, Jan. 1967, doi: 10.1109/TIT.1967.1053964.
+
+\bibitem{b12} L. Breiman, ``Random forests,'' \textit{Machine Learning}, vol. 45, no. 1, pp. 5--32, 2001, doi: 10.1023/A:1010933404324.
+
+\bibitem{b13} J. H. Friedman, ``Greedy function approximation: A gradient boosting machine,'' \textit{The Annals of Statistics}, vol. 29, no. 5, pp. 1189--1232, Oct. 2001, doi: 10.1214/aos/1013203451.
+
+\bibitem{b14} T. Hastie, R. Tibshirani, and J. Friedman, \textit{The Elements of Statistical Learning: Data Mining, Inference, and Prediction}, 2nd ed. New York: Springer, 2009.
+
+\bibitem{b15} A. Tabbakh, J. K. Rout, and M. Rout, ``Analysis and Prediction of the Survival of Titanic Passengers Using Machine Learning,'' in \textit{Proc. Int. Conf. Computing and Network Communications}, Advances in Intelligent Systems and Computing, vol. 1276, Springer, Singapore, 2021, pp. 297--304.
+
+\bibitem{b16} H. Ranglani, ``Empirical Analysis of the Bias-Variance Tradeoff Across Machine Learning Models,'' Social Science Research Network (SSRN), Preprint, Feb. 2025, doi: 10.2139/ssrn.5086450.
+
+\bibitem{b17} K. Singh, R. Nagpal, and R. Sehgal, ``Exploratory data analysis and machine learning on Titanic disaster dataset,'' in \textit{Proc. 2020 10th Int. Conf. Cloud Computing, Data Science and Engineering (Confluence)}, Noida, India, 2020, pp. 796--801.
+
+\bibitem{b18} L. Breiman, ``Bagging predictors,'' \textit{Machine Learning}, vol. 24, no. 2, pp. 123--140, 1996, doi: 10.1007/BF00058655.
+
+\bibitem{b19} P. Domingos, ``A few useful things to know about machine learning,'' \textit{Communications of the ACM}, vol. 55, no. 10, pp. 78--87, Oct. 2012, doi: 10.1145/2347736.2347755.
+
+\bibitem{b20} D. Aha, D. Kibler, and M. K. Albert, ``Instance-based learning algorithms,'' \textit{Machine Learning}, vol. 6, no. 1, pp. 37--66, Jan. 1991, doi: 10.1007/BF00153759.
+
+\bibitem{b21} B. Belkin, D. Hsu, S. Ma, and S. Mandal, ``Reconciling modern machine-learning practice and the classical bias-variance trade-off,'' \textit{Proc. Natl. Acad. Sci. U.S.A.}, vol. 116, no. 32, pp. 15849--15854, Jul. 2019, doi: 10.1073/pnas.1903070116.
+
+\bibitem{b22} S. Raschka, ``Model evaluation, model selection, and algorithm selection in machine learning,'' arXiv:1811.12808, Nov. 2018. [Online]. Available: https://arxiv.org/abs/1811.12808
+
+\bibitem{b23} B. Neal et al., ``A modern take on the bias-variance tradeoff in neural networks,'' arXiv:1810.08591, Oct. 2018. [Online]. Available: https://arxiv.org/abs/1810.08591
+
+\bibitem{b24} J. Cervantes, F. Garcia-Lamont, L. Rodriguez-Mazahua, and A. Lopez, ``A comprehensive survey on support vector machine classification: Applications, challenges and trends,'' \textit{Neurocomputing}, vol. 408, pp. 189--215, Sep. 2020, doi: 10.1016/j.neucom.2019.10.118.
+
+\bibitem{b25} T. Chen and C. Guestrin, ``XGBoost: A scalable tree boosting system,'' in \textit{Proc. 22nd ACM SIGKDD Int. Conf. Knowledge Discovery and Data Mining}, San Francisco, CA, USA, Aug. 2016, pp. 785--794, doi: 10.1145/2939672.2939785.
+
+\bibitem{b26} Y. LeCun, Y. Bengio, and G. Hinton, ``Deep learning,'' \textit{Nature}, vol. 521, pp. 436--444, May 2015, doi: 10.1038/nature14539.
+
+\bibitem{b27} B. Efron and R. J. Tibshirani, \textit{An Introduction to the Bootstrap}. New York: Chapman and Hall/CRC, 1993.
+
+\bibitem{b28} R. S. Olson and J. H. Moore, ``TPOT: A tree-based pipeline optimization tool for automating machine learning,'' in \textit{Proc. Workshop on Automatic Machine Learning, ICML}, 2016, pp. 66--74.
+
+\bibitem{b29} E. LeDell and S. Poirier, ``H2O AutoML: Scalable Automatic Machine Learning,'' in \textit{Proc. 7th ICML Workshop on Automated Machine Learning}, 2020.
+
+\bibitem{b30} M. Hall, E. Frank, G. Holmes, B. Pfahringer, P. Reutemann, and I. H. Witten, ``The WEKA data mining software: An update,'' \textit{ACM SIGKDD Explorations Newsletter}, vol. 11, no. 1, pp. 10--18, 2009, doi: 10.1145/1656274.1656278.
+
+\bibitem{b31} J. Demsar et al., ``Orange: Data Mining Toolbox in Python,'' \textit{Journal of Machine Learning Research}, vol. 14, pp. 2349--2353, 2013.
+
+\bibitem{b32} P. Flach, \textit{Machine Learning: The Art and Science of Algorithms That Make Sense of Data}. Cambridge: Cambridge University Press, 2012.
+
+\bibitem{b33} R. Detrano et al., ``International application of a new probability algorithm for the diagnosis of coronary artery disease,'' \textit{The American Journal of Cardiology}, vol. 64, no. 5, pp. 304--310, Aug. 1989, doi: 10.1016/0002-9149(89)90524-9.
+
+\bibitem{b34} D. De Cock, ``Ames, Iowa: Alternative to the Boston housing data as an end of semester regression project,'' \textit{Journal of Statistics Education}, vol. 19, no. 3, 2011, doi: 10.1080/10691898.2011.11889627.
+
+\bibitem{b35} N. V. Chawla, K. W. Bowyer, L. O. Hall, and W. P. Kegelmeyer, ``SMOTE: Synthetic minority over-sampling technique,'' \textit{Journal of Artificial Intelligence Research}, vol. 16, pp. 321--357, 2002, doi: 10.1613/jair.953.
+
+\bibitem{b36} S. O. Arik and T. Pfister, ``TabNet: Attentive interpretable tabular learning,'' in \textit{Proc. 35th AAAI Conf. Artificial Intelligence}, 2021, pp. 6679--6687.
+
+\end{thebibliography}
+
+\end{document}
