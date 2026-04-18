@@ -34,22 +34,22 @@ from sklearn.metrics import confusion_matrix as sk_confusion_matrix
 # STYLE CONFIGURATION
 # ─────────────────────────────────────────────
 STYLE = {
-    "figure.facecolor": "#1a1a2e",
-    "axes.facecolor": "#16213e",
-    "axes.edgecolor": "#e94560",
-    "axes.labelcolor": "#eee",
-    "text.color": "#eee",
-    "xtick.color": "#ccc",
-    "ytick.color": "#ccc",
-    "grid.color": "#333",
-    "grid.alpha": 0.3,
+    "figure.facecolor": "#ffffff",
+    "axes.facecolor": "#ffffff",
+    "axes.edgecolor": "#1f2937",
+    "axes.labelcolor": "#111827",
+    "text.color": "#111827",
+    "xtick.color": "#374151",
+    "ytick.color": "#374151",
+    "grid.color": "#d1d5db",
+    "grid.alpha": 0.6,
     "font.size": 10,
 }
 
-COLOR_TRAIN = "#00d2ff"   # cyan
-COLOR_TEST = "#e94560"    # red-pink
-COLOR_BEST = "#0f3460"    # dark blue accent
-COLOR_BAR = "#e94560"     # bar chart default
+COLOR_TRAIN = "#0ea5e9"   # blue
+COLOR_TEST = "#ef4444"    # red
+COLOR_BEST = "#2563eb"    # strong blue accent
+COLOR_BAR = "#ef4444"     # bar chart default
 CMAP_MATRIX = "YlOrRd"   # confusion matrix colormap
 
 
@@ -297,7 +297,7 @@ def _bar_chart(names, values, title, ylabel, highlight=None) -> str:
     fig, ax = plt.subplots(figsize=(max(10, len(names) * 0.7), 5))
 
     colors = [COLOR_BEST if n == highlight else COLOR_BAR for n in names]
-    bars = ax.bar(range(len(names)), values, color=colors, edgecolor="#222", linewidth=0.5)
+    bars = ax.bar(range(len(names)), values, color=colors, edgecolor="#d1d5db", linewidth=0.5)
 
     ax.set_xticks(range(len(names)))
     ax.set_xticklabels(names, rotation=45, ha="right", fontsize=8)
@@ -308,7 +308,7 @@ def _bar_chart(names, values, title, ylabel, highlight=None) -> str:
     # Value labels on bars
     for bar, val in zip(bars, values):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"{val:.4f}", ha="center", va="bottom", fontsize=7, color="#eee")
+                f"{val:.4f}", ha="center", va="bottom", fontsize=7, color="#111827")
 
     fig.tight_layout()
     return _fig_to_base64(fig)
@@ -323,9 +323,9 @@ def _grouped_bar(names, values1, values2, label1, label2,
     width = 0.35
 
     ax.bar(x - width / 2, values1, width, label=label1, color=COLOR_TRAIN,
-           edgecolor="#222", linewidth=0.5)
+           edgecolor="#d1d5db", linewidth=0.5)
     ax.bar(x + width / 2, values2, width, label=label2, color=COLOR_TEST,
-           edgecolor="#222", linewidth=0.5)
+           edgecolor="#d1d5db", linewidth=0.5)
 
     ax.set_xticks(x)
     ax.set_xticklabels(names, rotation=45, ha="right", fontsize=8)
@@ -375,7 +375,7 @@ def _complexity_curve(x_values, train_vals, test_vals,
                 xy=(best_x, best_y),
                 xytext=(10, 10),
                 textcoords="offset points",
-                color="#eee",
+                color="#111827",
                 fontsize=8,
                 bbox=dict(boxstyle="round,pad=0.25", facecolor=COLOR_BEST, edgecolor="none", alpha=0.9),
                 arrowprops=dict(arrowstyle="->", color=COLOR_BEST, linewidth=1.2),
@@ -396,7 +396,7 @@ def _scatter_pred_vs_actual(y_true, y_pred, title) -> str:
     """Scatter plot of predicted vs actual values with perfect-prediction line."""
     fig, ax = plt.subplots(figsize=(7, 6))
 
-    ax.scatter(y_true, y_pred, alpha=0.7, color=COLOR_TRAIN, edgecolors="#222",
+    ax.scatter(y_true, y_pred, alpha=0.7, color=COLOR_TRAIN, edgecolors="#d1d5db",
                linewidths=0.5, s=60, zorder=3)
 
     # Perfect prediction line
@@ -433,7 +433,7 @@ def _feature_importance_chart(model, feature_names, title, top_n=5) -> str | Non
     values = [float(score) for _, score in pairs]
 
     fig, ax = plt.subplots(figsize=(8, 4.8))
-    bars = ax.barh(labels, values, color=COLOR_TRAIN, edgecolor="#222", linewidth=0.6)
+    bars = ax.barh(labels, values, color=COLOR_TRAIN, edgecolor="#d1d5db", linewidth=0.6)
 
     ax.set_xlabel("Importance")
     ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
@@ -446,7 +446,7 @@ def _feature_importance_chart(model, feature_names, title, top_n=5) -> str | Non
             f"{value:.3f}",
             va="center",
             fontsize=8,
-            color="#eee",
+            color="#111827",
         )
 
     fig.tight_layout()
@@ -484,7 +484,7 @@ def _confusion_matrix_chart(y_true, y_pred, class_labels, title) -> str:
     thresh = cm.max() / 2.0
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
-            color = "#eee" if cm[i, j] > thresh else "#222"
+            color = "#ffffff" if cm[i, j] > thresh else "#111827"
             ax.text(j, i, str(cm[i, j]), ha="center", va="center",
                     color=color, fontsize=12, fontweight="bold")
 
