@@ -31,8 +31,11 @@ const bestModelBadge = document.getElementById("best-model-badge");
 const verdictText = document.getElementById("verdict-text");
 const metricsThead = document.getElementById("metrics-thead");
 const metricsTbody = document.getElementById("metrics-tbody");
+const fitRulesNote = document.getElementById("fit-rules-note");
 const chartsGrid = document.getElementById("charts-grid");
 const logContent = document.getElementById("log-content");
+const themeToggle = document.getElementById("theme-toggle");
+const themeToggleLabel = document.getElementById("theme-toggle-label");
 
 
 // ─── CHART FRIENDLY NAMES ───────────────────────────────────────────────────
@@ -46,14 +49,59 @@ const CHART_NAMES = {
     knn_complexity: "KNN Complexity Curve",
     predicted_vs_actual: "Predicted vs Actual",
     confusion_matrix: "Confusion Matrix",
+    feature_importance: "Feature Importance",
 };
 
 // Chart display order
 const CHART_ORDER = [
     "train_vs_test", "r2_comparison", "f1_comparison",
     "model_comparison", "poly_complexity", "dt_complexity",
-    "knn_complexity", "predicted_vs_actual", "confusion_matrix",
+    "knn_complexity", "feature_importance", "predicted_vs_actual", "confusion_matrix",
 ];
+
+const METRIC_TOOLTIPS = {
+    test_f1: "F1 balances precision and recall. It is especially useful when class sizes are uneven.",
+    test_accuracy: "Accuracy is the fraction of predictions that were correct overall.",
+    train_accuracy: "Training accuracy shows how well the model fits the training data.",
+    test_precision: "Precision is the share of predicted positives that were actually positive.",
+    test_recall: "Recall is the share of actual positives the model successfully found.",
+    test_r2: "R² shows how much target variance the model explains. Higher is better.",
+    train_r2: "Training R² shows fit on the training set and helps reveal overfitting.",
+    test_rmse: "RMSE is the typical prediction error size in the target's original units.",
+    test_mse: "MSE penalizes larger errors more strongly than RMSE.",
+    train_mse: "Training MSE helps compare fit on seen data versus unseen data.",
+};
+
+
+// ─── THEME ──────────────────────────────────────────────────────────────────
+const THEME_STORAGE_KEY = "ml-model-selector-theme";
+
+initTheme();
+
+if (themeToggle) {
+    themeToggle.addEventListener("click", toggleTheme);
+}
+
+function initTheme() {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    const preferredDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const theme = stored || (preferredDark ? "dark" : "light");
+    applyTheme(theme);
+}
+
+function toggleTheme() {
+    const current = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+    applyTheme(current === "light" ? "dark" : "light");
+}
+
+function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+
+    if (themeToggleLabel) {
+        themeToggleLabel.textContent = theme === "light" ? "Dark mode" : "Light mode";
+    }
+}
 
 
 // ─── FILE UPLOAD ────────────────────────────────────────────────────────────
@@ -258,21 +306,74 @@ async function runAnalysis() {
 
 function renderResults(data) {
     renderRecommendation(data.recommendation);
+    renderBaseline(data.baseline, data.metrics, data.dataset_info.task_type);
     renderMetricsTable(data.metrics, data.recommendation.best_model, data.dataset_info.task_type);
-    renderCharts(data.charts);
+    renderCharts(data.charts, data.cm_stats);
     renderLog(data.preprocess_log);
+}
+
+
+// ─── BASELINE CALLOUT ───────────────────────────────────────────────────────
+
+function renderBaseline(baseline, metrics, taskType) {
+    const container = document.getElementById("baseline-callout");
+    if (!container || !baseline) return;
+
+    let statHtml = "";
+    let beatCount = 0;
+    const total = metrics.length;
+
+    if (taskType === "regression") {
+        const baseRmse = baseline.test_rmse;
+        beatCount = metrics.filter(m => m.test_rmse < baseRmse).length;
+        statHtml = `
+            <span class="baseline-stat">Baseline RMSE: <strong>${baseRmse.toFixed(4)}</strong></span>
+            <span class="baseline-stat">Baseline R&sup2;: <strong>0.0000</strong></span>
+        `;
+    } else {
+        const baseAcc = baseline.test_accuracy;
+        const baseF1 = baseline.test_f1;
+        beatCount = metrics.filter(m => m.test_f1 > baseF1).length;
+        statHtml = `
+            <span class="baseline-stat">Strategy: <strong>${baseline.strategy}</strong></span>
+            <span class="baseline-stat">Baseline Acc: <strong>${baseAcc.toFixed(4)}</strong></span>
+            <span class="baseline-stat">Baseline F1: <strong>${baseF1.toFixed(4)}</strong></span>
+            <span class="baseline-stat" style="color:var(--text-muted);font-size:0.78rem;">${baseline.description}</span>
+        `;
+    }
+
+    const allBeat = beatCount === total;
+    const beatColor = allBeat ? "var(--green)" : "var(--yellow)";
+    const beatIcon = allBeat ? "✅" : "⚠️";
+
+    container.innerHTML = `
+        <div class="baseline-inner">
+            <div class="baseline-left">
+                <div class="baseline-title">📊 Naive Baseline</div>
+                <div class="baseline-stats">${statHtml}</div>
+            </div>
+            <div class="baseline-right">
+                <div class="baseline-beat" style="color:${beatColor}">
+                    ${beatIcon} ${beatCount}/${total} models beat the baseline
+                </div>
+                ${allBeat ? '<div class="baseline-note">All models outperform random prediction ✔</div>' : ''}
+            </div>
+        </div>
+    `;
+    container.style.display = "block";
 }
 
 
 // ─── RECOMMENDATION ────────────────────────────────────────────────────────
 
 function renderRecommendation(rec) {
-    bestModelBadge.innerHTML = `&#127942; ${rec.best_model}`;
+    bestModelBadge.innerHTML = `&#127942; ${escapeHtml(rec.best_model)}`;
 
     // Format verdict: bold the section headers
-    let v = rec.verdict;
+    let v = escapeHtml(rec.verdict);
     v = v.replace(/^(BEST MODEL:)/m, "<strong>$1</strong>");
     v = v.replace(/^(WHY:)/m, "<strong>$1</strong>");
+    v = v.replace(/^(RANKING CRITERIA:)/m, "<strong>$1</strong>");
     v = v.replace(/^(OVERFIT MODELS.*?:)/m, "<strong>$1</strong>");
     v = v.replace(/^(UNDERFIT MODELS.*?:)/m, "<strong>$1</strong>");
     v = v.replace(/^(SUMMARY:)/m, "<strong>$1</strong>");
@@ -296,6 +397,12 @@ function renderMetricsTable(metrics, bestModel, taskType) {
     metricsTaskType = taskType;
     currentSortCol = null;
     currentSortDir = "asc";
+
+    if (fitRulesNote) {
+        fitRulesNote.innerHTML = taskType === "regression"
+            ? "<strong>Fit Rules:</strong> Overfit if train-test R<sup>2</sup> gap &gt; 0.10 or test MSE is more than 1.5x train MSE. Underfit if test R<sup>2</sup> &lt; 0.40."
+            : "<strong>Fit Rules:</strong> Overfit if train-test accuracy gap &gt; 0.10. Underfit if test accuracy &lt; 0.50.";
+    }
 
     if (metrics.length === 0) return;
 
@@ -325,7 +432,7 @@ function renderMetricsTable(metrics, bestModel, taskType) {
 
     // Header
     metricsThead.innerHTML = "<tr>" + columns.map(c =>
-        `<th data-key="${c.key}" onclick="sortTable('${c.key}')">${c.label}</th>`
+        `<th data-key="${c.key}" onclick="sortTable('${c.key}')">${formatHeaderLabel(c)}</th>`
     ).join("") + "</tr>";
 
     // Body
@@ -402,10 +509,25 @@ function sortTable(key) {
     buildTableBody(sorted, null, metricsBestModel);
 }
 
+function formatHeaderLabel(column) {
+    const tooltip = METRIC_TOOLTIPS[column.key];
+    if (!tooltip) {
+        return `<span class="th-label">${column.label}</span>`;
+    }
+
+    const safeTooltip = escapeHtml(tooltip);
+    return `
+        <span class="th-label">
+            <span>${column.label}</span>
+            <span class="metric-tip" title="${safeTooltip}" aria-label="${safeTooltip}">?</span>
+        </span>
+    `;
+}
+
 
 // ─── CHARTS ─────────────────────────────────────────────────────────────────
 
-function renderCharts(charts) {
+function renderCharts(charts, cmStats) {
     chartsGrid.innerHTML = "";
 
     // Render in specified order, skip missing
@@ -415,30 +537,94 @@ function renderCharts(charts) {
         if (!orderedKeys.includes(k)) orderedKeys.push(k);
     });
 
-    orderedKeys.forEach((key, i) => {
-        const card = document.createElement("div");
-        card.className = "chart-card";
-        card.style.animationDelay = `${i * 0.1}s`;
-        card.style.animation = `fadeInUp 0.5s ease-out ${i * 0.1}s both`;
+    if (orderedKeys.length === 0) {
+        chartsGrid.innerHTML = `<div class="card"><div class="chart-label">No charts available for this run.</div></div>`;
+        return;
+    }
 
+    chartsGrid.innerHTML = `
+        <div class="chart-controls">
+            <div class="chart-controls-copy">
+                <strong>Focused chart view</strong>
+                <span>Select any graph and inspect it at a much larger size.</span>
+            </div>
+            <div class="chart-select-wrap">
+                <select id="chart-select"></select>
+            </div>
+        </div>
+        <div class="chart-stage" id="chart-stage"></div>
+    `;
+
+    const select = document.getElementById("chart-select");
+    const stage = document.getElementById("chart-stage");
+
+    orderedKeys.forEach((key) => {
         const friendlyName = CHART_NAMES[key] || key.replace(/_/g, " ");
-
-        card.innerHTML = `
-            <img src="data:image/png;base64,${charts[key]}" alt="${friendlyName}" loading="lazy">
-            <div class="chart-label">${friendlyName}</div>
-        `;
-
-        chartsGrid.appendChild(card);
+        const option = document.createElement("option");
+        option.value = key;
+        option.textContent = friendlyName;
+        select.appendChild(option);
     });
+
+    const renderSelectedChart = (key) => {
+        const friendlyName = CHART_NAMES[key] || key.replace(/_/g, " ");
+        let insightHtml = "";
+        let stageClass = "chart-stage";
+
+        if (key === "confusion_matrix") {
+            stageClass += " chart-stage-matrix";
+        } else if (["poly_complexity", "dt_complexity", "knn_complexity"].includes(key)) {
+            stageClass += " chart-stage-compact";
+        }
+
+        if (key === "confusion_matrix" && cmStats && cmStats.insights && cmStats.insights.length > 0) {
+            const bullets = cmStats.insights.map(s => `<li>${escapeHtml(s)}</li>`).join("");
+            insightHtml = `<ul class="cm-insights">${bullets}</ul>`;
+        }
+
+        stage.className = stageClass;
+        stage.innerHTML = `
+            <div class="chart-stage-meta">
+                <strong>${escapeHtml(friendlyName)}</strong>
+                <span>Use the dropdown to switch visualizations</span>
+            </div>
+            <img src="data:image/png;base64,${charts[key]}" alt="${escapeHtml(friendlyName)}" loading="lazy">
+            ${insightHtml}
+        `;
+    };
+
+    select.addEventListener("change", () => renderSelectedChart(select.value));
+    renderSelectedChart(orderedKeys[0]);
 }
 
 
 // ─── PREPROCESSING LOG ──────────────────────────────────────────────────────
 
 function renderLog(log) {
-    logContent.innerHTML = log.map(line =>
-        `<div class="log-line">${escapeHtml(line)}</div>`
-    ).join("");
+    const groups = groupLogEntries(log);
+
+    logContent.innerHTML = `
+        <div class="log-groups">
+            ${groups.map((group, index) => `
+                <div class="log-group">
+                    <button
+                        class="log-group-header ${index === 0 ? "open" : ""}"
+                        type="button"
+                        onclick="toggleLogGroup(${index})"
+                    >
+                        <span>${escapeHtml(group.title)}</span>
+                        <span class="log-group-meta">
+                            <span class="log-group-count">${group.lines.length} step${group.lines.length === 1 ? "" : "s"}</span>
+                            <span class="log-group-arrow">&#9660;</span>
+                        </span>
+                    </button>
+                    <div class="log-group-body ${index === 0 ? "open" : ""}" id="log-group-body-${index}">
+                        ${group.lines.map(line => `<div class="log-line">${escapeHtml(line)}</div>`).join("")}
+                    </div>
+                </div>
+            `).join("")}
+        </div>
+    `;
 }
 
 function toggleLog() {
@@ -448,6 +634,82 @@ function toggleLog() {
     toggle.innerHTML = content.classList.contains("open")
         ? "&#9650; Hide preprocessing steps"
         : "&#9660; Show preprocessing steps";
+}
+
+function toggleLogGroup(index) {
+    const body = document.getElementById(`log-group-body-${index}`);
+    const header = body?.previousElementSibling;
+    if (!body || !header) return;
+
+    body.classList.toggle("open");
+    header.classList.toggle("open");
+}
+
+function groupLogEntries(log) {
+    const buckets = [
+        { title: "Data Cleaning", lines: [] },
+        { title: "Encoding", lines: [] },
+        { title: "Missing Values", lines: [] },
+        { title: "Split & Scaling", lines: [] },
+        { title: "Other", lines: [] },
+    ];
+
+    log.forEach(line => {
+        const normalized = line.toLowerCase();
+
+        if (matchesAny(normalized, [
+            "loaded dataset",
+            "renamed",
+            "dropped id-like",
+            "high-cardinality",
+            "duplicate",
+            "near-zero variance",
+            "highly correlated",
+            "outlier",
+            "task type",
+            "target    :",
+            "features  :",
+            "final dataset",
+            "sanity check passed",
+        ])) {
+            buckets[0].lines.push(line);
+            return;
+        }
+
+        if (matchesAny(normalized, [
+            "label-encoded",
+            "force-encoded",
+            "target encoded",
+            "classes found",
+        ])) {
+            buckets[1].lines.push(line);
+            return;
+        }
+
+        if (matchesAny(normalized, [
+            "missing",
+            "imputed",
+        ])) {
+            buckets[2].lines.push(line);
+            return;
+        }
+
+        if (matchesAny(normalized, [
+            "train/test split",
+            "standardised",
+        ])) {
+            buckets[3].lines.push(line);
+            return;
+        }
+
+        buckets[4].lines.push(line);
+    });
+
+    return buckets.filter(group => group.lines.length > 0);
+}
+
+function matchesAny(text, patterns) {
+    return patterns.some(pattern => text.includes(pattern));
 }
 
 

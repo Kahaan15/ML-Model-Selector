@@ -24,7 +24,7 @@ import pandas as pd
 # ─────────────────────────────────────────────
 # PUBLIC API
 # ─────────────────────────────────────────────
-def recommend(metrics_df: pd.DataFrame) -> dict:
+def recommend(metrics_df: pd.DataFrame, result=None) -> dict:
     """
     Analyse a metrics DataFrame and pick the best model.
 
@@ -42,7 +42,7 @@ def recommend(metrics_df: pd.DataFrame) -> dict:
     if "test_r2" in metrics_df.columns:
         return _recommend_regression(metrics_df)
     else:
-        return _recommend_classification(metrics_df)
+        return _recommend_classification(metrics_df, result=result)
 
 
 # ─────────────────────────────────────────────
@@ -91,7 +91,7 @@ def _recommend_regression(df: pd.DataFrame) -> dict:
 # ─────────────────────────────────────────────
 # CLASSIFICATION RECOMMENDATION
 # ─────────────────────────────────────────────
-def _recommend_classification(df: pd.DataFrame) -> dict:
+def _recommend_classification(df: pd.DataFrame, result=None) -> dict:
     overfit = df[df["fit_label"] == "overfit"]["model_name"].tolist()
     underfit = df[df["fit_label"] == "underfit"]["model_name"].tolist()
     good = df[df["fit_label"] == "good_fit"]
@@ -115,7 +115,7 @@ def _recommend_classification(df: pd.DataFrame) -> dict:
         ["test_f1", "test_accuracy"], ascending=[False, False]
     )["model_name"].tolist()
 
-    verdict = _build_classification_verdict(best_name, best_row, overfit, underfit, df)
+    verdict = _build_classification_verdict(best_name, best_row, overfit, underfit, df, result=result)
 
     return {
         "best_model": best_name,
@@ -157,6 +157,32 @@ def _get_model_description(name: str) -> str:
         "GradientBoost": "Gradient Boosting (sequential ensemble)",
     }
     return descriptions.get(name, name)
+
+
+def _class_balance_summary(result) -> dict:
+    """Summarize class imbalance for classification datasets."""
+    if result is None or getattr(result, "task_type", None) != "classification":
+        return {}
+
+    class_balance = getattr(result, "class_balance", None) or {}
+    if not class_balance:
+        return {}
+
+    sorted_items = sorted(class_balance.items(), key=lambda item: item[1], reverse=True)
+    majority_label, majority_ratio = sorted_items[0]
+    minority_label, minority_ratio = sorted_items[-1]
+
+    return {
+        "majority_label": majority_label,
+        "majority_ratio": majority_ratio,
+        "minority_label": minority_label,
+        "minority_ratio": minority_ratio,
+        "is_imbalanced": majority_ratio > 0.60,
+        "distribution_text": ", ".join(
+            f"{label}={ratio*100:.1f}%"
+            for label, ratio in sorted_items
+        ),
+    }
 
 
 def _build_regression_verdict(best_name, best_row, overfit, underfit, df) -> str:
@@ -226,10 +252,11 @@ def _build_regression_verdict(best_name, best_row, overfit, underfit, df) -> str
     return "\n".join(lines)
 
 
-def _build_classification_verdict(best_name, best_row, overfit, underfit, df) -> str:
+def _build_classification_verdict(best_name, best_row, overfit, underfit, df, result=None) -> str:
     """Build a multi-paragraph educational verdict for classification."""
     desc = _get_model_description(best_name)
     lines = []
+    balance = _class_balance_summary(result)
 
     # ── Winner announcement ──────────────────────────────────────────────────
     lines.append(
@@ -245,18 +272,70 @@ def _build_classification_verdict(best_name, best_row, overfit, underfit, df) ->
 
     # ── Why this model won ───────────────────────────────────────────────────
     acc_gap = best_row["train_accuracy"] - best_row["test_accuracy"]
+    why_bits = []
+
     if acc_gap < 0.05:
-        lines.append(
-            "WHY: This model has the highest test F1 score with minimal gap between "
-            "training and test performance. It classifies unseen data almost as well "
-            "as training data — a hallmark of good generalization.\n"
+        why_bits.append(
+            "It has the highest test F1 score while keeping the train-test gap small, "
+            "so it generalizes well instead of just memorizing the training set."
         )
     else:
-        lines.append(
-            "WHY: Among all models, this one strikes the best balance between "
-            "learning ability and generalization. It may not be perfect, but it "
-            "handles unseen data better than the alternatives.\n"
+        why_bits.append(
+            "Among all models, it gives the strongest balance between predictive power "
+            "and generalization on unseen data."
         )
+
+    if balance.get("distribution_text"):
+        if balance["is_imbalanced"]:
+            why_bits.append(
+                f"The class distribution is imbalanced ({balance['distribution_text']}), "
+                "so F1 matters more than raw accuracy because it checks whether minority "
+                "classes are still being recovered well."
+            )
+        else:
+            why_bits.append(
+                f"The class split is fairly balanced ({balance['distribution_text']}), "
+                "so the winning model needed to be strong on both F1 and accuracy rather "
+                "than benefiting from a dominant class."
+            )
+
+    if best_name == "SVM_rbf":
+        why_bits.append(
+            "The RBF SVM can model curved, nonlinear class boundaries, which is a good fit "
+            "when the classes are not cleanly separated by a single straight decision line."
+        )
+    elif best_name == "GradientBoost":
+        why_bits.append(
+            "Gradient boosting won because it can combine many weak nonlinear splits into a "
+            "stronger classifier without relying on a single rigid boundary."
+        )
+    elif best_name == "RandomForest":
+        why_bits.append(
+            "Random forest won because averaging many trees reduced variance while still "
+            "capturing nonlinear interactions in the dataset."
+        )
+    elif best_name == "LogisticReg":
+        why_bits.append(
+            "A linear decision boundary was sufficient here, so the simpler logistic model "
+            "matched the data well without introducing unnecessary variance."
+        )
+
+    severe_tree_overfit = df[
+        df["model_name"].str.startswith("DT_depth")
+        & (df["train_accuracy"] >= 0.99)
+        & ((df["train_accuracy"] - df["test_accuracy"]) >= 0.10)
+    ]["model_name"].tolist()
+    if severe_tree_overfit:
+        why_bits.append(
+            f"Tree-based models such as {', '.join(severe_tree_overfit[:2])} overfit severely "
+            "with near-perfect training accuracy, which made the more stable winner a safer choice."
+        )
+
+    lines.append("WHY: " + " ".join(why_bits) + "\n")
+
+    lines.append(
+        "RANKING CRITERIA: 1. Test F1  2. Test Accuracy  3. Overfitting Penalty\n"
+    )
 
     # ── Overfit explanation ──────────────────────────────────────────────────
     if overfit:

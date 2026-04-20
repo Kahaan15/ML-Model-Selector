@@ -20,6 +20,7 @@ import sys
 import json
 import tempfile
 import traceback
+import tempfile
 
 from flask import Flask, request, jsonify, send_from_directory
 
@@ -40,6 +41,22 @@ MIN_ROWS = 100
 MAX_ROWS = 50000
 MAX_FEATURES = 20
 ALLOWED_EXTENSIONS = {".csv"}
+
+
+def _parse_optional_int(value, field_name, min_value=1, max_value=100):
+    """Parse optional integer form fields with range validation."""
+    if value is None or value == "":
+        return None
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an integer.") from exc
+
+    if parsed < min_value or parsed > max_value:
+        raise ValueError(f"{field_name} must be between {min_value} and {max_value}.")
+
+    return parsed
 
 
 # ─────────────────────────────────────────────
@@ -162,7 +179,9 @@ def upload():
         # ── Save to temp file (so preprocessor can open by path) ─────────────
         tmp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp_uploads")
         os.makedirs(tmp_dir, exist_ok=True)
-        tmp_path = os.path.join(tmp_dir, file.filename)
+        suffix = os.path.splitext(file.filename)[1].lower() or ".csv"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=tmp_dir) as tmp_file:
+            tmp_path = tmp_file.name
         file.save(tmp_path)
 
         try:
