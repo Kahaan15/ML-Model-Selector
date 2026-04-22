@@ -20,7 +20,6 @@ import sys
 import json
 import tempfile
 import traceback
-import tempfile
 
 from flask import Flask, request, jsonify, send_from_directory
 
