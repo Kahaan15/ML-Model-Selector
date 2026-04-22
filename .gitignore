@@ -6,3 +6,4 @@ outputs/
 .env
 venv/
 .vscode/
+tmp_uploads/

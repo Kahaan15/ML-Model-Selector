@@ -40,7 +40,7 @@ def recommend(metrics_df: pd.DataFrame, result=None) -> dict:
     dict with keys: best_model, verdict, overfit_models, underfit_models, all_rankings
     """
     if "test_r2" in metrics_df.columns:
-        return _recommend_regression(metrics_df)
+        return _recommend_regression(metrics_df, result=result)
     else:
         return _recommend_classification(metrics_df, result=result)
 
@@ -48,8 +48,10 @@ def recommend(metrics_df: pd.DataFrame, result=None) -> dict:
 # ─────────────────────────────────────────────
 # REGRESSION RECOMMENDATION
 # ─────────────────────────────────────────────
-def _recommend_regression(df: pd.DataFrame) -> dict:
-    overfit = df[df["fit_label"] == "overfit"]["model_name"].tolist()
+def _recommend_regression(df: pd.DataFrame, result=None) -> dict:
+    highly_overfit = df[df["fit_label"] == "highly_overfit"]["model_name"].tolist()
+    mildly_overfit = df[df["fit_label"] == "mildly_overfit"]["model_name"].tolist()
+    overfit = highly_overfit + mildly_overfit
     underfit = df[df["fit_label"] == "underfit"]["model_name"].tolist()
     good = df[df["fit_label"] == "good_fit"]
 
@@ -62,12 +64,11 @@ def _recommend_regression(df: pd.DataFrame) -> dict:
         best_name = ranked.iloc[0]["model_name"]
         best_row = ranked.iloc[0]
     else:
-        # All models are overfit or underfit — pick the one with
-        # smallest gap between train and test R2 (least overfit)
-        df = df.copy()
-        df["r2_gap"] = abs(df["train_r2"] - df["test_r2"])
+        # All models are overfit or underfit. 
+        # It's better to recommend the model with the highest test_r2, 
+        # even if it's flawed, rather than a model that is completely underfit.
         ranked = df.sort_values(
-            ["r2_gap", "test_r2"], ascending=[True, False]
+            ["test_r2", "test_mse"], ascending=[False, True]
         ).reset_index(drop=True)
         best_name = ranked.iloc[0]["model_name"]
         best_row = ranked.iloc[0]
@@ -77,11 +78,14 @@ def _recommend_regression(df: pd.DataFrame) -> dict:
         ["test_r2", "test_mse"], ascending=[False, True]
     )["model_name"].tolist()
 
-    verdict = _build_regression_verdict(best_name, best_row, overfit, underfit, df)
+    verdict = _build_regression_verdict(best_name, best_row, highly_overfit, mildly_overfit, underfit, df, result=result)
+    quality_label, quality_desc = _score_dataset_quality(best_row['test_r2'], "R2 score")
 
     return {
         "best_model": best_name,
         "verdict": verdict,
+        "dataset_quality": quality_label,
+        "dataset_quality_desc": quality_desc,
         "overfit_models": overfit,
         "underfit_models": underfit,
         "all_rankings": all_ranked,
@@ -92,7 +96,9 @@ def _recommend_regression(df: pd.DataFrame) -> dict:
 # CLASSIFICATION RECOMMENDATION
 # ─────────────────────────────────────────────
 def _recommend_classification(df: pd.DataFrame, result=None) -> dict:
-    overfit = df[df["fit_label"] == "overfit"]["model_name"].tolist()
+    highly_overfit = df[df["fit_label"] == "highly_overfit"]["model_name"].tolist()
+    mildly_overfit = df[df["fit_label"] == "mildly_overfit"]["model_name"].tolist()
+    overfit = highly_overfit + mildly_overfit
     underfit = df[df["fit_label"] == "underfit"]["model_name"].tolist()
     good = df[df["fit_label"] == "good_fit"]
 
@@ -103,10 +109,8 @@ def _recommend_classification(df: pd.DataFrame, result=None) -> dict:
         best_name = ranked.iloc[0]["model_name"]
         best_row = ranked.iloc[0]
     else:
-        df = df.copy()
-        df["acc_gap"] = abs(df["train_accuracy"] - df["test_accuracy"])
         ranked = df.sort_values(
-            ["acc_gap", "test_f1"], ascending=[True, False]
+            ["test_f1", "test_accuracy"], ascending=[False, False]
         ).reset_index(drop=True)
         best_name = ranked.iloc[0]["model_name"]
         best_row = ranked.iloc[0]
@@ -115,11 +119,14 @@ def _recommend_classification(df: pd.DataFrame, result=None) -> dict:
         ["test_f1", "test_accuracy"], ascending=[False, False]
     )["model_name"].tolist()
 
-    verdict = _build_classification_verdict(best_name, best_row, overfit, underfit, df, result=result)
+    verdict = _build_classification_verdict(best_name, best_row, highly_overfit, mildly_overfit, underfit, df, result=result)
+    quality_label, quality_desc = _score_dataset_quality(best_row['test_f1'], "F1 score")
 
     return {
         "best_model": best_name,
         "verdict": verdict,
+        "dataset_quality": quality_label,
+        "dataset_quality_desc": quality_desc,
         "overfit_models": overfit,
         "underfit_models": underfit,
         "all_rankings": all_ranked,
@@ -159,6 +166,18 @@ def _get_model_description(name: str) -> str:
     return descriptions.get(name, name)
 
 
+def _score_dataset_quality(best_score: float, metric_name: str) -> tuple[str, str]:
+    """Evaluate overall dataset predictive signal."""
+    if best_score < 0.30:
+        return "POOR", f"Top {metric_name} is very low. Dataset likely lacks predictive features, or relationships are purely noise."
+    elif best_score < 0.65:
+        return "MODERATE", "There is real signal, but predictions are noisy. Feature engineering might help."
+    elif best_score < 0.90:
+        return "STRONG", "The dataset possesses highly predictive, clear relationships."
+    else:
+        return "EXCEPTIONAL", "Performance is nearly perfect. (Be wary of target leakage!)"
+
+
 def _class_balance_summary(result) -> dict:
     """Summarize class imbalance for classification datasets."""
     if result is None or getattr(result, "task_type", None) != "classification":
@@ -185,7 +204,163 @@ def _class_balance_summary(result) -> dict:
     }
 
 
-def _build_regression_verdict(best_name, best_row, overfit, underfit, df) -> str:
+def _root_cause_regression(df: pd.DataFrame) -> list[str]:
+    """
+    Rule-based inference engine: scans model scores and fires
+    diagnostic insights about WHY the dataset is behaving a certain way.
+    """
+    insights = []
+
+    def score(name):
+        row = df[df["model_name"] == name]
+        return float(row["test_r2"].iloc[0]) if not row.empty else None
+
+    def gap(name):
+        row = df[df["model_name"] == name]
+        if row.empty:
+            return None
+        return float(row["train_r2"].iloc[0]) - float(row["test_r2"].iloc[0])
+
+    linear_r2  = score("Linear")
+    poly2_r2   = score("Poly_d2")
+    poly3_r2   = score("Poly_d3")
+    gb_r2      = score("GradientBoost")
+    rf_r2      = score("RandomForest")
+    svr_r2     = score("SVR")
+    rf_gap     = gap("RandomForest")
+    gb_gap     = gap("GradientBoost")
+
+    best_r2 = float(df["test_r2"].max())
+
+    # Rule 1: All models struggle — dataset likely lacks signal
+    if best_r2 < 0.30:
+        insights.append(
+            "ROOT CAUSE: All models are struggling. The best test R2 is below 0.30, which suggests "
+            "the selected features have weak or no correlation with the target. "
+            "The dataset is likely missing key predictive columns, or the target contains heavy random noise."
+        )
+
+    # Rule 2: Non-linearity detected
+    if linear_r2 is not None and gb_r2 is not None and gb_r2 - linear_r2 > 0.15:
+        insights.append(
+            "ROOT CAUSE: Non-linear relationships detected. "
+            f"Gradient Boosting (R2={gb_r2:.3f}) significantly outperformed Linear Regression (R2={linear_r2:.3f}). "
+            "This means the relationship between features and the target is curved or interactive — "
+            "a straight line cannot capture it."
+        )
+    elif linear_r2 is not None and poly3_r2 is not None and poly3_r2 - linear_r2 > 0.10:
+        insights.append(
+            "ROOT CAUSE: Polynomial structure detected. "
+            f"Polynomial d3 (R2={poly3_r2:.3f}) noticeably outperformed Linear (R2={linear_r2:.3f}). "
+            "The data likely has a curved, non-constant trend."
+        )
+
+    # Rule 3: Tree models overfitting badly
+    if rf_gap is not None and rf_gap > 0.30:
+        insights.append(
+            f"ROOT CAUSE: Tree-based models (e.g. RandomForest, R2 gap={rf_gap:.3f}) show very high overfitting. "
+            "This often occurs with high-cardinality categorical features or when N_samples is too small "
+            "relative to N_features. The model is memorizing rather than learning."
+        )
+    elif gb_gap is not None and gb_gap > 0.30:
+        insights.append(
+            f"ROOT CAUSE: GradientBoost shows a large train-test R2 gap ({gb_gap:.3f}). "
+            "It may be overfitting to noise in sequential boosting iterations. "
+            "Reducing max_depth or n_estimators would likely help."
+        )
+
+    # Rule 4: SVR fails completely
+    if svr_r2 is not None and svr_r2 < 0:
+        insights.append(
+            "ROOT CAUSE: SVR completely failed (negative R2). "
+            "This typically means the data was not properly scaled, "
+            "or the target range is too wide for RBF kernel default parameters to handle."
+        )
+
+    # Rule 5: Linear performs on par with everything — likely actually linear
+    if (
+        linear_r2 is not None and gb_r2 is not None
+        and abs(linear_r2 - gb_r2) < 0.05
+        and linear_r2 > 0.60
+    ):
+        insights.append(
+            "ROOT CAUSE: Linear structure confirmed. "
+            "Linear Regression scored comparably to ensemble models, indicating "
+            "the relationships in this dataset are near-linear and well-captured by a simple model."
+        )
+
+    return insights
+
+
+def _root_cause_classification(df: pd.DataFrame) -> list[str]:
+    """
+    Rule-based inference for classification tasks.
+    """
+    insights = []
+
+    def score(name):
+        row = df[df["model_name"] == name]
+        return float(row["test_f1"].iloc[0]) if not row.empty else None
+
+    def gap(name):
+        row = df[df["model_name"] == name]
+        if row.empty:
+            return None
+        return float(row["train_accuracy"].iloc[0]) - float(row["test_accuracy"].iloc[0])
+
+    lr_f1      = score("LogisticReg")
+    gb_f1      = score("GradientBoost")
+    rf_f1      = score("RandomForest")
+    nb_f1      = score("NaiveBayes")
+    svm_lin_f1 = score("SVM_linear")
+    best_f1    = float(df["test_f1"].max())
+    rf_gap     = gap("RandomForest")
+    gb_gap     = gap("GradientBoost")
+
+    # Rule 1: Overall low performance
+    if best_f1 < 0.60:
+        insights.append(
+            "ROOT CAUSE: Overall low classification performance. "
+            f"The best F1 across all models is only {best_f1:.3f}. "
+            "This suggests class boundaries are not well-defined, or features do not "
+            "strongly separate the target classes."
+        )
+
+    # Rule 2: Linear vs nonlinear gap
+    if lr_f1 is not None and gb_f1 is not None and gb_f1 - lr_f1 > 0.10:
+        insights.append(
+            "ROOT CAUSE: Non-linear decision boundaries detected. "
+            f"Gradient Boosting (F1={gb_f1:.3f}) significantly outperforms Logistic Regression (F1={lr_f1:.3f}). "
+            "Class boundaries are likely curved or contain feature interactions that a linear model cannot capture."
+        )
+    elif lr_f1 is not None and gb_f1 is not None and abs(lr_f1 - gb_f1) < 0.05 and lr_f1 > 0.70:
+        insights.append(
+            "ROOT CAUSE: Linear separability confirmed. "
+            "Logistic Regression performed comparably to ensemble models, suggesting "
+            "the class boundaries in this dataset are relatively linear."
+        )
+
+    # Rule 3: Tree overfitting
+    if rf_gap is not None and rf_gap > 0.20:
+        insights.append(
+            f"ROOT CAUSE: RandomForest shows a high train–test accuracy gap ({rf_gap:.3f}). "
+            "This is a classic sign of high variance — the forest memorized training examples "
+            "but failed to generalize. May indicate noisy labels or high-cardinality features."
+        )
+
+    # Rule 4: Naive Bayes competitive
+    if nb_f1 is not None and best_f1 > 0 and nb_f1 / best_f1 > 0.90:
+        insights.append(
+            "ROOT CAUSE: Naive Bayes performs on par with complex models. "
+            "This suggests your features may be roughly conditionally independent of each other, "
+            "which is exactly the assumption Naive Bayes makes. The dataset may have a clean, "
+            "low-interaction structure."
+        )
+
+    return insights
+
+
+def _build_regression_verdict(best_name, best_row, highly_overfit, mildly_overfit, underfit, df, result=None) -> str:
     """Build a multi-paragraph educational verdict for regression."""
     desc = _get_model_description(best_name)
     lines = []
@@ -201,6 +376,26 @@ def _build_regression_verdict(best_name, best_row, overfit, underfit, df) -> str
         f"Test RMSE = {best_row['test_rmse']:.2f}  |  "
         f"Fit: {best_row['fit_label']}\n"
     )
+
+    # ── Contextual RMSE Interpretation ─────────────────────────────────────────
+    if result is not None:
+        import numpy as np
+        y_all = np.concatenate([result.y_train, result.y_test])
+        y_mean = float(np.mean(np.abs(y_all)))
+        if y_mean > 0:
+            rmse_pct = (best_row['test_rmse'] / y_mean) * 100
+            if rmse_pct < 10:
+                quality = "excellent"
+            elif rmse_pct < 25:
+                quality = "acceptable"
+            elif rmse_pct < 50:
+                quality = "poor"
+            else:
+                quality = "very poor"
+            lines.append(
+                f"PREDICTION ERROR: On average, predictions are off by ~{rmse_pct:.1f}% of the typical target value. "
+                f"This is considered {quality} predictive accuracy for a regression model.\n"
+            )
 
     # ── Why this model won ───────────────────────────────────────────────────
     r2_gap = best_row["train_r2"] - best_row["test_r2"]
@@ -218,14 +413,19 @@ def _build_regression_verdict(best_name, best_row, overfit, underfit, df) -> str
         )
 
     # ── Overfit explanation ──────────────────────────────────────────────────
-    if overfit:
-        lines.append(
-            f"OVERFIT MODELS ({len(overfit)}): {', '.join(overfit)}\n"
-            "These models scored well on training data but poorly on test data. "
-            "They memorized the training set instead of learning generalizable patterns. "
-            "In bias-variance terms, they have LOW BIAS but HIGH VARIANCE — "
-            "their predictions change drastically with different training samples.\n"
-        )
+    if highly_overfit or mildly_overfit:
+        if highly_overfit:
+            lines.append(
+                f"HIGHLY OVERFIT MODELS ({len(highly_overfit)}): {', '.join(highly_overfit)}\n"
+                "These models completely memorized the training data but failed catastrophically on the test data. "
+                "In bias-variance terms, this is classic high variance.\n"
+            )
+        if mildly_overfit:
+            lines.append(
+                f"MILDLY OVERFIT MODELS ({len(mildly_overfit)}): {', '.join(mildly_overfit)}\n"
+                "These models saw a slight dropoff in performance when moving to unseen data. "
+                "Their variance is slightly elevated, meaning they might be too complex for the problem.\n"
+            )
 
     # ── Underfit explanation ─────────────────────────────────────────────────
     if underfit:
@@ -237,13 +437,21 @@ def _build_regression_verdict(best_name, best_row, overfit, underfit, df) -> str
             "they consistently make the same wrong predictions.\n"
         )
 
+    # ── Root Cause Analysis ──────────────────────────────────────────────────
+    root_causes = _root_cause_regression(df)
+    if root_causes:
+        lines.append("ROOT CAUSE ANALYSIS:")
+        for rc in root_causes:
+            lines.append(rc + "\n")
+
     # ── Bias-variance takeaway ───────────────────────────────────────────────
     total = len(df)
-    n_good = total - len(overfit) - len(underfit)
+    n_overfit = len(highly_overfit) + len(mildly_overfit)
+    n_good = total - n_overfit - len(underfit)
     lines.append(
         f"SUMMARY: Out of {total} models tested, "
         f"{n_good} achieved good fit, "
-        f"{len(overfit)} overfit, and "
+        f"{n_overfit} overfit, and "
         f"{len(underfit)} underfit. "
         f"The ideal model sits at the sweet spot of the bias-variance tradeoff — "
         f"complex enough to capture patterns, but not so complex that it memorizes noise."
@@ -252,7 +460,7 @@ def _build_regression_verdict(best_name, best_row, overfit, underfit, df) -> str
     return "\n".join(lines)
 
 
-def _build_classification_verdict(best_name, best_row, overfit, underfit, df, result=None) -> str:
+def _build_classification_verdict(best_name, best_row, highly_overfit, mildly_overfit, underfit, df, result=None) -> str:
     """Build a multi-paragraph educational verdict for classification."""
     desc = _get_model_description(best_name)
     lines = []
@@ -338,14 +546,19 @@ def _build_classification_verdict(best_name, best_row, overfit, underfit, df, re
     )
 
     # ── Overfit explanation ──────────────────────────────────────────────────
-    if overfit:
-        lines.append(
-            f"OVERFIT MODELS ({len(overfit)}): {', '.join(overfit)}\n"
-            "These models achieved high training accuracy but dropped significantly on "
-            "test data. They memorized class boundaries specific to the training set. "
-            "HIGH VARIANCE — they would produce very different decision boundaries "
-            "if trained on a different random sample.\n"
-        )
+    if highly_overfit or mildly_overfit:
+        if highly_overfit:
+            lines.append(
+                f"HIGHLY OVERFIT MODELS ({len(highly_overfit)}): {', '.join(highly_overfit)}\n"
+                "These models completely memorized the training data but failed catastrophically on the test data. "
+                "In bias-variance terms, this is classic high variance.\n"
+            )
+        if mildly_overfit:
+            lines.append(
+                f"MILDLY OVERFIT MODELS ({len(mildly_overfit)}): {', '.join(mildly_overfit)}\n"
+                "These models saw a slight dropoff in performance when moving to unseen data. "
+                "Their variance is slightly elevated, meaning they might be too complex for the problem.\n"
+            )
 
     # ── Underfit explanation ─────────────────────────────────────────────────
     if underfit:
@@ -356,13 +569,21 @@ def _build_classification_verdict(best_name, best_row, overfit, underfit, df, re
             "pattern that's simpler than reality.\n"
         )
 
+    # ── Root Cause Analysis ──────────────────────────────────────────────────
+    root_causes = _root_cause_classification(df)
+    if root_causes:
+        lines.append("ROOT CAUSE ANALYSIS:")
+        for rc in root_causes:
+            lines.append(rc + "\n")
+
     # ── Bias-variance takeaway ───────────────────────────────────────────────
     total = len(df)
-    n_good = total - len(overfit) - len(underfit)
+    n_overfit = len(highly_overfit) + len(mildly_overfit)
+    n_good = total - n_overfit - len(underfit)
     lines.append(
         f"SUMMARY: Out of {total} models tested, "
         f"{n_good} achieved good fit, "
-        f"{len(overfit)} overfit, and "
+        f"{n_overfit} overfit, and "
         f"{len(underfit)} underfit. "
         f"The best classifier balances decision boundary complexity — "
         f"flexible enough to separate classes, but not so flexible that it overfits to noise."
@@ -371,92 +592,3 @@ def _build_classification_verdict(best_name, best_row, overfit, underfit, df, re
     return "\n".join(lines)
 
 
-# ─────────────────────────────────────────────
-# QUICK TEST  (run: python recommender.py)
-# ─────────────────────────────────────────────
-if __name__ == "__main__":
-    import io
-    import sys
-    import os
-
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from preprocessor import preprocess
-    from models import train_all_models
-    from metrics import compute_metrics
-
-    # ── Test 1: Regression ───────────────────────────────────────────────────
-    reg_csv = """id,age,salary,experience,years_education,department,target_income
-1,25,50000,2,16,Engineering,55000
-2,32,75000,8,18,Marketing,80000
-3,28,60000,5,16,Engineering,65000
-4,45,95000,20,20,Management,100000
-5,38,85000,14,18,Engineering,90000
-6,29,62000,6,16,Marketing,67000
-7,52,110000,28,22,Management,115000
-8,35,78000,11,18,Engineering,83000
-9,26,53000,3,16,Marketing,58000
-10,41,92000,17,20,Engineering,97000
-11,33,72000,9,18,Management,77000
-12,27,56000,4,16,Engineering,61000
-13,48,105000,24,20,Marketing,110000
-14,36,81000,12,18,Engineering,86000
-15,30,67000,7,16,Management,72000"""
-
-    print("=" * 70)
-    print("TEST 1: REGRESSION RECOMMENDATION")
-    print("=" * 70)
-
-    result = preprocess(io.StringIO(reg_csv), target_column="target_income", task_type="regression")
-    models = train_all_models(result)
-    models = {k: v for k, v in models.items() if v is not None}
-    metrics_df = compute_metrics(models, result)
-    rec = recommend(metrics_df)
-
-    print(f"\nBest model : {rec['best_model']}")
-    print(f"Overfit    : {rec['overfit_models']}")
-    print(f"Underfit   : {rec['underfit_models']}")
-    print(f"Rankings   : {rec['all_rankings']}")
-    print(f"\n--- VERDICT ---\n{rec['verdict']}")
-
-    # ── Test 2: Classification ───────────────────────────────────────────────
-    clf_csv = """sepal_length,sepal_width,petal_length,petal_width,species
-5.1,3.5,1.4,0.2,setosa
-4.9,3.0,1.4,0.2,setosa
-6.7,3.1,4.7,1.5,versicolor
-6.3,3.3,6.0,2.5,virginica
-5.8,2.7,5.1,1.9,virginica
-5.7,2.8,4.5,1.3,versicolor
-6.4,3.2,4.5,1.5,versicolor
-5.2,3.5,1.5,0.2,setosa
-7.7,3.8,6.7,2.2,virginica
-5.5,2.4,3.8,1.1,versicolor
-4.6,3.1,1.5,0.2,setosa
-6.9,3.1,5.1,2.3,virginica
-5.0,3.4,1.5,0.2,setosa
-6.1,2.9,4.7,1.4,versicolor
-7.2,3.2,6.0,1.8,virginica
-5.4,3.7,1.5,0.2,setosa
-6.5,3.0,5.5,1.8,virginica
-5.6,2.9,3.6,1.3,versicolor
-4.8,3.4,1.6,0.2,setosa
-7.4,2.8,6.1,1.9,virginica"""
-
-    print("\n" + "=" * 70)
-    print("TEST 2: CLASSIFICATION RECOMMENDATION")
-    print("=" * 70)
-
-    result2 = preprocess(io.StringIO(clf_csv), target_column="species")
-    models2 = train_all_models(result2)
-    models2 = {k: v for k, v in models2.items() if v is not None}
-    metrics_df2 = compute_metrics(models2, result2)
-    rec2 = recommend(metrics_df2)
-
-    print(f"\nBest model : {rec2['best_model']}")
-    print(f"Overfit    : {rec2['overfit_models']}")
-    print(f"Underfit   : {rec2['underfit_models']}")
-    print(f"Rankings   : {rec2['all_rankings']}")
-    print(f"\n--- VERDICT ---\n{rec2['verdict']}")
-
-    print("\n" + "=" * 70)
-    print("ALL TESTS PASSED")
-    print("=" * 70)

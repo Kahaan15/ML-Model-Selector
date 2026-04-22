@@ -43,67 +43,22 @@ from sklearn.metrics import (
 OVERFIT_MSE_RATIO = 1.5
 
 # Regression: overfit if R² gap (train - test) exceeds this
-OVERFIT_R2_GAP = 0.10
+OVERFIT_R2_GAP_HIGH = 0.20
+OVERFIT_R2_GAP_MILD = 0.10
 
 # Regression: underfit if test R² is below this
 UNDERFIT_R2_THRESHOLD = 0.40
 
 # Classification: overfit if accuracy gap (train - test) exceeds this
-OVERFIT_ACC_GAP = 0.10
+OVERFIT_ACC_GAP_HIGH = 0.20
+OVERFIT_ACC_GAP_MILD = 0.10
 
 # Classification: underfit if test accuracy is below this
 UNDERFIT_ACC_THRESHOLD = 0.50
 
-
 # ─────────────────────────────────────────────
 # PUBLIC API
 # ─────────────────────────────────────────────
-def compute_baseline(result) -> dict:
-    """
-    Compute a naive baseline for comparison.
-
-    Classification: majority-class predictor
-        → accuracy = fraction of majority class
-        → F1 = weighted F1 predicting majority class for all rows
-
-    Regression: mean-value predictor
-        → R² = 0 by definition (predicting mean gives R²=0)
-        → RMSE = std of y_test
-
-    Returns
-    -------
-    dict with keys depending on task type.
-    """
-    if result.task_type == "regression":
-        y_test = result.y_test
-        mean_pred = np.full_like(y_test, float(np.mean(result.y_train)), dtype=float)
-        rmse = float(np.sqrt(mean_squared_error(y_test, mean_pred)))
-        return {
-            "strategy": "Mean Prediction",
-            "test_r2": 0.0,
-            "test_rmse": round(rmse, 4),
-            "description": "Predicts the training mean for every sample",
-        }
-    else:
-        y_test = result.y_test
-        # Majority class in training set
-        unique, counts = np.unique(result.y_train, return_counts=True)
-        majority_class = unique[np.argmax(counts)]
-        majority_frac = round(float(counts.max() / counts.sum()), 4)
-        majority_pred = np.full_like(y_test, majority_class)
-
-        baseline_acc = round(float(accuracy_score(y_test, majority_pred)), 4)
-        baseline_f1 = round(float(f1_score(y_test, majority_pred, average="weighted", zero_division=0)), 4)
-
-        return {
-            "strategy": "Majority Class",
-            "majority_class": str(majority_class),
-            "majority_fraction": majority_frac,
-            "test_accuracy": baseline_acc,
-            "test_f1": baseline_f1,
-            "description": f"{majority_frac*100:.0f}% of samples belong to class '{majority_class}'",
-        }
-
 
 def compute_cm_stats(best_model, result) -> dict:
     """
@@ -333,10 +288,12 @@ def _label_regression_fit(train_mse, test_mse, train_r2, test_r2) -> str:
     else:
         mse_ratio = 1.0
 
-    if r2_gap > OVERFIT_R2_GAP or mse_ratio > OVERFIT_MSE_RATIO:
-        return "overfit"
-    elif test_r2 < UNDERFIT_R2_THRESHOLD:
+    if test_r2 < UNDERFIT_R2_THRESHOLD:
         return "underfit"
+    elif r2_gap > OVERFIT_R2_GAP_HIGH or mse_ratio > OVERFIT_MSE_RATIO * 1.5:
+        return "highly_overfit"
+    elif r2_gap > OVERFIT_R2_GAP_MILD or mse_ratio > OVERFIT_MSE_RATIO:
+        return "mildly_overfit"
     else:
         return "good_fit"
 
@@ -350,103 +307,13 @@ def _label_classification_fit(train_acc, test_acc) -> str:
     """
     acc_gap = train_acc - test_acc
 
-    if acc_gap > OVERFIT_ACC_GAP:
-        return "overfit"
-    elif test_acc < UNDERFIT_ACC_THRESHOLD:
+    if test_acc < UNDERFIT_ACC_THRESHOLD:
         return "underfit"
+    elif acc_gap > OVERFIT_ACC_GAP_HIGH:
+        return "highly_overfit"
+    elif acc_gap > OVERFIT_ACC_GAP_MILD:
+        return "mildly_overfit"
     else:
         return "good_fit"
 
 
-# ─────────────────────────────────────────────
-# QUICK TEST  (run: python metrics.py)
-# ─────────────────────────────────────────────
-if __name__ == "__main__":
-    import io
-    import sys
-    import os
-
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from preprocessor import preprocess
-    from models import train_all_models
-
-    # ── Test 1: Regression ───────────────────────────────────────────────────
-    reg_csv = """id,age,salary,experience,years_education,department,target_income
-1,25,50000,2,16,Engineering,55000
-2,32,75000,8,18,Marketing,80000
-3,28,60000,5,16,Engineering,65000
-4,45,95000,20,20,Management,100000
-5,38,85000,14,18,Engineering,90000
-6,29,62000,6,16,Marketing,67000
-7,52,110000,28,22,Management,115000
-8,35,78000,11,18,Engineering,83000
-9,26,53000,3,16,Marketing,58000
-10,41,92000,17,20,Engineering,97000
-11,33,72000,9,18,Management,77000
-12,27,56000,4,16,Engineering,61000
-13,48,105000,24,20,Marketing,110000
-14,36,81000,12,18,Engineering,86000
-15,30,67000,7,16,Management,72000"""
-
-    print("=" * 70)
-    print("TEST 1: REGRESSION METRICS")
-    print("=" * 70)
-
-    result = preprocess(io.StringIO(reg_csv), target_column="target_income", task_type="regression")
-    models = train_all_models(result)
-    models = {k: v for k, v in models.items() if v is not None}
-    metrics_df = compute_metrics(models, result)
-
-    # Print full table
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.width", 120)
-    print(f"\nModels scored: {len(metrics_df)}")
-    print(metrics_df.to_string(index=False))
-
-    # Fit label distribution
-    print(f"\nFit labels:")
-    for label, count in metrics_df["fit_label"].value_counts().items():
-        print(f"  {label}: {count}")
-
-    # ── Test 2: Classification ───────────────────────────────────────────────
-    clf_csv = """sepal_length,sepal_width,petal_length,petal_width,species
-5.1,3.5,1.4,0.2,setosa
-4.9,3.0,1.4,0.2,setosa
-6.7,3.1,4.7,1.5,versicolor
-6.3,3.3,6.0,2.5,virginica
-5.8,2.7,5.1,1.9,virginica
-5.7,2.8,4.5,1.3,versicolor
-6.4,3.2,4.5,1.5,versicolor
-5.2,3.5,1.5,0.2,setosa
-7.7,3.8,6.7,2.2,virginica
-5.5,2.4,3.8,1.1,versicolor
-4.6,3.1,1.5,0.2,setosa
-6.9,3.1,5.1,2.3,virginica
-5.0,3.4,1.5,0.2,setosa
-6.1,2.9,4.7,1.4,versicolor
-7.2,3.2,6.0,1.8,virginica
-5.4,3.7,1.5,0.2,setosa
-6.5,3.0,5.5,1.8,virginica
-5.6,2.9,3.6,1.3,versicolor
-4.8,3.4,1.6,0.2,setosa
-7.4,2.8,6.1,1.9,virginica"""
-
-    print("\n" + "=" * 70)
-    print("TEST 2: CLASSIFICATION METRICS")
-    print("=" * 70)
-
-    result2 = preprocess(io.StringIO(clf_csv), target_column="species")
-    models2 = train_all_models(result2)
-    models2 = {k: v for k, v in models2.items() if v is not None}
-    metrics_df2 = compute_metrics(models2, result2)
-
-    print(f"\nModels scored: {len(metrics_df2)}")
-    print(metrics_df2.to_string(index=False))
-
-    print(f"\nFit labels:")
-    for label, count in metrics_df2["fit_label"].value_counts().items():
-        print(f"  {label}: {count}")
-
-    print("\n" + "=" * 70)
-    print("ALL TESTS PASSED")
-    print("=" * 70)

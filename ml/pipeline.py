@@ -21,13 +21,13 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from preprocessor import preprocess
-from models import train_all_models
-from metrics import compute_metrics, compute_baseline, compute_cm_stats
+from models import train_all_models, compute_cv_summary
+from metrics import compute_metrics, compute_cm_stats
 from recommender import recommend
 from visualize import generate_charts
 
 
-def run_pipeline(source, target_column=None, task_type=None) -> dict:
+def run_pipeline(source, target_column=None, task_type=None, class_weight_mode="off") -> dict:
     """
     Run the full ML pipeline end-to-end.
 
@@ -53,7 +53,15 @@ def run_pipeline(source, target_column=None, task_type=None) -> dict:
     result = preprocess(source, target_column=target_column, task_type=task_type)
 
     # ── Step 2: Train all models ─────────────────────────────────────────────
-    models = train_all_models(result)
+    class_weight_mode = (class_weight_mode or "off").lower()
+    if class_weight_mode not in ("off", "on"):
+        raise ValueError("class_weight_mode must be 'off' or 'on'")
+
+    class_weighting_applied = False
+    if result.task_type == "classification":
+        class_weighting_applied = class_weight_mode == "on"
+
+    models = train_all_models(result, use_class_weighting=class_weighting_applied)
 
     # Filter out any models that failed to train
     models = {k: v for k, v in models.items() if v is not None}
@@ -64,8 +72,9 @@ def run_pipeline(source, target_column=None, task_type=None) -> dict:
     # ── Step 3: Compute metrics ──────────────────────────────────────────────
     metrics_df = compute_metrics(models, result)
 
-    # ── Step 3b: Compute naive baseline ──────────────────────────────────────
-    baseline = compute_baseline(result)
+    # ── Step 3c: Cross-validation summary for top models ─────────────────────
+    cv_summary = compute_cv_summary(result, metrics_df, models, top_n=3, cv_folds=3)
+
 
     # ── Step 4: Recommend best model ─────────────────────────────────────────
     recommendation = recommend(metrics_df, result=result)
@@ -81,7 +90,7 @@ def run_pipeline(source, target_column=None, task_type=None) -> dict:
     return {
         "preprocess_log": result.log,
         "metrics": metrics_df.to_dict(orient="records"),
-        "baseline": baseline,
+        "cv_summary": cv_summary,
         "cm_stats": cm_stats,
         "recommendation": recommendation,
         "charts": charts,
@@ -94,47 +103,11 @@ def run_pipeline(source, target_column=None, task_type=None) -> dict:
             "n_classes": result.n_classes,
             "class_labels": result.class_labels,
             "class_balance": result.class_balance,
+            "class_imbalance": result.class_imbalance,
+            "leakage_warnings": result.leakage_warnings,
+            "class_weight_mode": class_weight_mode,
+            "class_weighting_applied": class_weighting_applied,
         },
     }
 
 
-# ─────────────────────────────────────────────
-# QUICK TEST  (run: python pipeline.py)
-# ─────────────────────────────────────────────
-if __name__ == "__main__":
-    import io
-
-    reg_csv = """id,age,salary,experience,years_education,department,target_income
-1,25,50000,2,16,Engineering,55000
-2,32,75000,8,18,Marketing,80000
-3,28,60000,5,16,Engineering,65000
-4,45,95000,20,20,Management,100000
-5,38,85000,14,18,Engineering,90000
-6,29,62000,6,16,Marketing,67000
-7,52,110000,28,22,Management,115000
-8,35,78000,11,18,Engineering,83000
-9,26,53000,3,16,Marketing,58000
-10,41,92000,17,20,Engineering,97000
-11,33,72000,9,18,Management,77000
-12,27,56000,4,16,Engineering,61000
-13,48,105000,24,20,Marketing,110000
-14,36,81000,12,18,Engineering,86000
-15,30,67000,7,16,Management,72000"""
-
-    print("=" * 60)
-    print("PIPELINE: FULL END-TO-END TEST")
-    print("=" * 60)
-
-    output = run_pipeline(io.StringIO(reg_csv), target_column="target_income", task_type="regression")
-
-    print(f"\n[OK] Keys: {list(output.keys())}")
-    print(f"[OK] Preprocess log: {len(output['preprocess_log'])} entries")
-    print(f"[OK] Models scored: {len(output['metrics'])}")
-    print(f"[OK] Charts generated: {len(output['charts'])} -> {list(output['charts'].keys())}")
-    print(f"[OK] Best model: {output['recommendation']['best_model']}")
-    print(f"[OK] Task type: {output['dataset_info']['task_type']}")
-    print(f"[OK] Features: {output['dataset_info']['feature_names']}")
-
-    print("\n" + "=" * 60)
-    print("PIPELINE TEST PASSED")
-    print("=" * 60)

@@ -22,13 +22,17 @@ const summaryCard = document.getElementById("summary-card");
 const summaryGrid = document.getElementById("summary-grid");
 const warningsContainer = document.getElementById("warnings-container");
 const configCard = document.getElementById("config-card");
+const configValidation = document.getElementById("config-validation");
 const targetSelect = document.getElementById("target-select");
 const taskSelect = document.getElementById("task-select");
+const classWeightSelect = document.getElementById("class-weight-select");
 const runBtn = document.getElementById("run-btn");
 const resultsSection = document.getElementById("results-section");
+const executiveSummaryCard = document.getElementById("executive-summary-card");
 const loadingOverlay = document.getElementById("loading-overlay");
 const bestModelBadge = document.getElementById("best-model-badge");
 const verdictText = document.getElementById("verdict-text");
+const cvSummaryCard = document.getElementById("cv-summary-card");
 const metricsThead = document.getElementById("metrics-thead");
 const metricsTbody = document.getElementById("metrics-tbody");
 const fitRulesNote = document.getElementById("fit-rules-note");
@@ -36,6 +40,12 @@ const chartsGrid = document.getElementById("charts-grid");
 const logContent = document.getElementById("log-content");
 const themeToggle = document.getElementById("theme-toggle");
 const themeToggleLabel = document.getElementById("theme-toggle-label");
+const commandMeta = document.getElementById("command-meta");
+const stepUpload = document.getElementById("step-upload");
+const stepConfig = document.getElementById("step-config");
+const stepResults = document.getElementById("step-results");
+const resultsNavButtons = Array.from(document.querySelectorAll(".results-nav-btn"));
+const resultsPanels = Array.from(document.querySelectorAll(".results-panel"));
 
 
 // ─── CHART FRIENDLY NAMES ───────────────────────────────────────────────────
@@ -77,6 +87,8 @@ const METRIC_TOOLTIPS = {
 const THEME_STORAGE_KEY = "ml-model-selector-theme";
 
 initTheme();
+initResultsWorkspace();
+updateWorkflowState("upload");
 
 if (themeToggle) {
     themeToggle.addEventListener("click", toggleTheme);
@@ -101,6 +113,44 @@ function applyTheme(theme) {
     if (themeToggleLabel) {
         themeToggleLabel.textContent = theme === "light" ? "Dark mode" : "Light mode";
     }
+}
+
+function initResultsWorkspace() {
+    if (resultsNavButtons.length === 0 || resultsPanels.length === 0) return;
+
+    resultsNavButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const panelName = btn.dataset.panel;
+            if (!panelName) return;
+            setActiveResultsPanel(panelName);
+        });
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (!resultsSection.classList.contains("visible") || event.altKey) return;
+        if (event.target && ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
+
+        const panelMap = {
+            "1": "overview",
+            "2": "metrics",
+            "3": "visuals",
+            "4": "preprocessing",
+        };
+
+        const panelName = panelMap[event.key];
+        if (!panelName) return;
+        setActiveResultsPanel(panelName);
+    });
+}
+
+function setActiveResultsPanel(panelName) {
+    resultsNavButtons.forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.panel === panelName);
+    });
+
+    resultsPanels.forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.panel === panelName);
+    });
 }
 
 
@@ -132,18 +182,28 @@ function handleFileSelect() {
     const file = fileInput.files[0];
     if (!file) return;
 
+    clearConfigValidation();
+
     // Validate extension
     if (!file.name.toLowerCase().endsWith(".csv")) {
         showError("Only CSV files are supported.");
+        setConfigValidation(["Please upload a .csv file to continue."], { file: true });
+        return;
+    }
+
+    if (file.size === 0) {
+        showError("The selected file is empty.");
+        setConfigValidation(["The selected CSV is empty. Please choose a file with data rows."], { file: true });
         return;
     }
 
     uploadedFile = file;
-    fileInfo.textContent = `\u2705 ${file.name} (${formatBytes(file.size)})`;
+    fileInfo.textContent = `[ OK ] ${file.name} (${formatBytes(file.size)})`;
     fileInfo.style.display = "inline-block";
 
     // Hide previous results
     resultsSection.classList.remove("visible");
+    updateWorkflowState("config");
 
     // Send to /columns
     fetchColumns(file);
@@ -170,6 +230,7 @@ async function fetchColumns(file) {
         populateTargetDropdown(data.columns);
         configCard.style.display = "block";
         configCard.style.animation = "fadeInUp 0.5s ease-out both";
+        updateWorkflowState("config");
 
         // Set auto-detected task type
         if (data.auto_task_type) {
@@ -191,7 +252,7 @@ function renderSummary(data) {
         data.warnings.forEach(w => {
             const div = document.createElement("div");
             div.className = "warning-banner";
-            div.textContent = "\u26A0 " + w;
+            div.textContent = "[ WARN ] " + w;
             warningsContainer.appendChild(div);
         });
     }
@@ -219,7 +280,7 @@ function renderSummary(data) {
             <div class="stat-label">Missing Values</div>
         </div>
         <div class="stat-item">
-            <span class="stat-value" style="color: var(--accent); font-size: 1rem; text-transform: capitalize;">
+            <span id="auto-detected-val" class="stat-value" style="color: var(--accent); font-size: 1rem; text-transform: capitalize;">
                 ${data.auto_task_type}
             </span>
             <div class="stat-label">Auto-Detected Task</div>
@@ -252,7 +313,18 @@ function populateTargetDropdown(columns) {
     }
 
     targetSelect.addEventListener("change", () => {
+        clearConfigValidation();
         runBtn.disabled = targetSelect.value === "";
+        
+        const selectedTarget = columnData?.columns?.find(c => c.name === targetSelect.value);
+        if (selectedTarget) {
+            let dynAutoTask = "regression";
+            if (selectedTarget.dtype === "object" || selectedTarget.nunique <= 15) {
+                dynAutoTask = "classification";
+            }
+            const autoBanner = document.getElementById("auto-detected-val");
+            if (autoBanner) autoBanner.textContent = dynAutoTask;
+        }
     });
 }
 
@@ -260,23 +332,59 @@ function populateTargetDropdown(columns) {
 // ─── RUN ANALYSIS ──────────────────────────────────────────────────────────
 
 runBtn.addEventListener("click", runAnalysis);
+taskSelect.addEventListener("change", clearConfigValidation);
+if (classWeightSelect) {
+    classWeightSelect.addEventListener("change", clearConfigValidation);
+}
 
 async function runAnalysis() {
-    if (!uploadedFile || !targetSelect.value) return;
+    const validation = validateRunInputs();
+    if (!validation.ok) {
+        setConfigValidation(validation.messages, validation.fields);
+        return;
+    }
+
+    clearConfigValidation();
 
     // Show loading
     loadingOverlay.classList.add("active");
     runBtn.disabled = true;
     resultsSection.classList.remove("visible");
 
+    const requestStart = performance.now();
+    const controller = new AbortController();
+    const REQUEST_TIMEOUT_MS = 90000;
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
     const formData = new FormData();
     formData.append("file", uploadedFile);
     formData.append("target_column", targetSelect.value);
     formData.append("task_type", taskSelect.value);
+    formData.append("class_weight_mode", classWeightSelect ? classWeightSelect.value : "off");
 
     try {
-        const res = await fetch("/upload", { method: "POST", body: formData });
-        const data = await res.json();
+        const res = await fetch("/upload", {
+            method: "POST",
+            body: formData,
+            signal: controller.signal,
+            headers: {
+                "Accept": "application/json",
+            },
+        });
+
+        let data;
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+            data = await res.json();
+        } else {
+            const text = await res.text();
+            data = { error: text || `Unexpected response format (${res.status}).` };
+        }
+
+        if (!res.ok) {
+            const serverError = data?.error || `Server returned ${res.status}.`;
+            throw new Error(serverError);
+        }
 
         if (data.error) {
             showError(data.error);
@@ -287,6 +395,7 @@ async function runAnalysis() {
 
         renderResults(data);
         resultsSection.classList.add("visible");
+        updateWorkflowState("results");
 
         // Scroll to results
         setTimeout(() => {
@@ -294,80 +403,273 @@ async function runAnalysis() {
         }, 200);
 
     } catch (err) {
-        showError("Pipeline failed: " + err.message);
+        const elapsedMs = Math.round(performance.now() - requestStart);
+        if (err.name === "AbortError") {
+            showError(`Pipeline request timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s. Please retry; if it repeats, reload once and run again.`);
+        } else {
+            showError(`Pipeline failed after ${Math.round(elapsedMs / 1000)}s: ${err.message}`);
+        }
     } finally {
+        clearTimeout(timeoutId);
         loadingOverlay.classList.remove("active");
         runBtn.disabled = false;
     }
+}
+
+function validateRunInputs() {
+    const messages = [];
+    const fields = {};
+
+    if (!uploadedFile) {
+        messages.push("Upload a CSV file before running analysis.");
+        fields.file = true;
+    } else {
+        if (!uploadedFile.name.toLowerCase().endsWith(".csv")) {
+            messages.push("Only .csv files are accepted.");
+            fields.file = true;
+        }
+        if (uploadedFile.size === 0) {
+            messages.push("The uploaded file is empty.");
+            fields.file = true;
+        }
+    }
+
+    if (!columnData || !Array.isArray(columnData.columns) || columnData.columns.length === 0) {
+        messages.push("File profiling is incomplete. Wait for the dataset summary to load.");
+    }
+
+    if (!targetSelect.value) {
+        messages.push("Select a target column to continue.");
+        fields.target = true;
+    }
+
+    const selectedTask = taskSelect.value;
+    if (!["auto", "regression", "classification"].includes(selectedTask)) {
+        messages.push("Task type must be Auto-detect, Regression, or Classification.");
+        fields.task = true;
+    }
+
+    const classWeightMode = classWeightSelect ? classWeightSelect.value : "off";
+    if (!["off", "on"].includes(classWeightMode)) {
+        messages.push("Class weighting must be Off or On.");
+        fields.classWeight = true;
+    }
+
+    if (selectedTask === "regression" && classWeightMode === "on") {
+        messages.push("Class weighting applies to classification only. Use Off for regression.");
+        fields.task = true;
+        fields.classWeight = true;
+    }
+
+    const selectedTarget = columnData?.columns?.find((col) => col.name === targetSelect.value);
+    if (selectedTask === "regression" && selectedTarget && !selectedTarget.is_numeric) {
+        messages.push("Regression works best with a numeric target. Pick a numeric target or use Auto-detect.");
+        fields.target = true;
+        fields.task = true;
+    }
+
+    if (selectedTask === "classification" && selectedTarget && Number(selectedTarget.nunique) < 2) {
+        messages.push("Classification needs at least 2 unique target values.");
+        fields.target = true;
+    }
+
+    return {
+        ok: messages.length === 0,
+        messages,
+        fields,
+    };
+}
+
+function updateWorkflowState(stage) {
+    const states = [
+        { el: stepUpload, name: "upload" },
+        { el: stepConfig, name: "config" },
+        { el: stepResults, name: "results" },
+    ];
+
+    const activeIndex = states.findIndex((entry) => entry.name === stage);
+    states.forEach((entry, index) => {
+        if (!entry.el) return;
+        entry.el.classList.toggle("active", index === activeIndex);
+        entry.el.classList.toggle("done", index < activeIndex);
+    });
+
+    const sidebarNav = document.getElementById("sidebar-results-nav");
+    if (sidebarNav) {
+        sidebarNav.style.display = stage === "results" ? "flex" : "none";
+    }
+}
+
+function setConfigValidation(messages, fields = {}) {
+    if (!configValidation) return;
+
+    if (!messages || messages.length === 0) {
+        clearConfigValidation();
+        return;
+    }
+
+    clearFieldValidationState();
+    if (fields.target) targetSelect.classList.add("invalid-field");
+    if (fields.task) taskSelect.classList.add("invalid-field");
+    if (fields.classWeight && classWeightSelect) classWeightSelect.classList.add("invalid-field");
+
+    configValidation.classList.add("visible");
+    configValidation.innerHTML = `<ul>${messages.map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul>`;
+}
+
+function clearFieldValidationState() {
+    targetSelect.classList.remove("invalid-field");
+    taskSelect.classList.remove("invalid-field");
+    if (classWeightSelect) classWeightSelect.classList.remove("invalid-field");
+}
+
+function clearConfigValidation() {
+    clearFieldValidationState();
+    if (!configValidation) return;
+    configValidation.classList.remove("visible");
+    configValidation.innerHTML = "";
 }
 
 
 // ─── RENDER RESULTS ─────────────────────────────────────────────────────────
 
 function renderResults(data) {
-    renderRecommendation(data.recommendation);
-    renderBaseline(data.baseline, data.metrics, data.dataset_info.task_type);
+    setActiveResultsPanel("overview");
+    renderCommandBar(data);
+    renderExecutiveSummary(data);
+    renderRecommendation(data.recommendation, data.charts, data.dataset_info.task_type);
+    renderCvSummary(data.cv_summary, data.dataset_info.task_type);
     renderMetricsTable(data.metrics, data.recommendation.best_model, data.dataset_info.task_type);
     renderCharts(data.charts, data.cm_stats);
     renderLog(data.preprocess_log);
 }
 
+function renderCommandBar(data) {
+    if (!commandMeta) return;
 
-// ─── BASELINE CALLOUT ───────────────────────────────────────────────────────
+    const datasetInfo = data?.dataset_info || {};
+    const recommendation = data?.recommendation || {};
+    const originalRows = Number(datasetInfo.original_shape?.[0]);
+    const finalRows = Number(datasetInfo.final_shape?.[0]);
+    const taskType = String(datasetInfo.task_type || taskSelect.value || "unknown");
+    const bestModel = String(recommendation.best_model || "N/A");
+    const targetColumn = String(targetSelect?.value || "N/A");
+    const classWeightMode = String(datasetInfo.class_weight_mode || classWeightSelect?.value || "off");
+    const applied = Boolean(datasetInfo.class_weighting_applied);
+    const now = new Date();
 
-function renderBaseline(baseline, metrics, taskType) {
-    const container = document.getElementById("baseline-callout");
-    if (!container || !baseline) return;
-
-    let statHtml = "";
-    let beatCount = 0;
-    const total = metrics.length;
-
-    if (taskType === "regression") {
-        const baseRmse = baseline.test_rmse;
-        beatCount = metrics.filter(m => m.test_rmse < baseRmse).length;
-        statHtml = `
-            <span class="baseline-stat">Baseline RMSE: <strong>${baseRmse.toFixed(4)}</strong></span>
-            <span class="baseline-stat">Baseline R&sup2;: <strong>0.0000</strong></span>
+    const createChip = (label, value) => {
+        return `
+            <div class="command-chip">
+                <span class="command-chip-label">${escapeHtml(label)}</span>
+                <span class="command-chip-value">${escapeHtml(value)}</span>
+            </div>
         `;
-    } else {
-        const baseAcc = baseline.test_accuracy;
-        const baseF1 = baseline.test_f1;
-        beatCount = metrics.filter(m => m.test_f1 > baseF1).length;
-        statHtml = `
-            <span class="baseline-stat">Strategy: <strong>${baseline.strategy}</strong></span>
-            <span class="baseline-stat">Baseline Acc: <strong>${baseAcc.toFixed(4)}</strong></span>
-            <span class="baseline-stat">Baseline F1: <strong>${baseF1.toFixed(4)}</strong></span>
-            <span class="baseline-stat" style="color:var(--text-muted);font-size:0.78rem;">${baseline.description}</span>
-        `;
+    };
+
+    const chips = [
+        createChip("Dataset", uploadedFile?.name || "current upload"),
+        createChip("Task", taskType.toUpperCase()),
+        createChip("Target", targetColumn),
+        createChip("Class Weight", `${classWeightMode}${applied ? " (applied)" : ""}`),
+        createChip("Timestamp", now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })),
+    ];
+
+    commandMeta.innerHTML = chips.join("");
+}
+
+function renderExecutiveSummary(data) {
+    if (!executiveSummaryCard) return;
+
+    const datasetInfo = data?.dataset_info || {};
+    const recommendation = data?.recommendation || {};
+    const metrics = Array.isArray(data?.metrics) ? data.metrics : [];
+
+    const taskType = String(datasetInfo.task_type || "unknown");
+    const bestModel = String(recommendation.best_model || "N/A");
+
+    const originalRows = datasetInfo.original_shape?.[0] ?? null;
+    const finalRows = datasetInfo.final_shape?.[0] ?? null;
+    const featureCount = Array.isArray(datasetInfo.feature_names) ? datasetInfo.feature_names.length : 0;
+
+    const bestMetricRow = metrics.find((m) => m.model_name === recommendation.best_model) || metrics[0] || null;
+
+    let performanceLine = "Not available for this run.";
+
+    if (taskType === "regression" && bestMetricRow) {
+        const testR2 = Number(bestMetricRow.test_r2);
+        const testRmse = Number(bestMetricRow.test_rmse);
+        performanceLine = `Best test R2: ${formatMetric(testR2)} | RMSE: ${formatMetric(testRmse)}`;
     }
 
-    const allBeat = beatCount === total;
-    const beatColor = allBeat ? "var(--green)" : "var(--yellow)";
-    const beatIcon = allBeat ? "✅" : "⚠️";
+    if (taskType === "classification" && bestMetricRow) {
+        const testF1 = Number(bestMetricRow.test_f1);
+        const testAcc = Number(bestMetricRow.test_accuracy);
+        performanceLine = `Best test F1: ${formatMetric(testF1)} | Accuracy: ${formatMetric(testAcc)}`;
+    }
 
-    container.innerHTML = `
-        <div class="baseline-inner">
-            <div class="baseline-left">
-                <div class="baseline-title">📊 Naive Baseline</div>
-                <div class="baseline-stats">${statHtml}</div>
+    const overfitCount = Array.isArray(recommendation.overfit_models) ? recommendation.overfit_models.length : 0;
+    const underfitCount = Array.isArray(recommendation.underfit_models) ? recommendation.underfit_models.length : 0;
+    const totalModels = metrics.length;
+    const leakageWarnings = Array.isArray(datasetInfo.leakage_warnings) ? datasetInfo.leakage_warnings : [];
+    const classImbalance = datasetInfo.class_imbalance || {};
+    const classWeightingApplied = Boolean(datasetInfo.class_weighting_applied);
+
+    let riskLine = "No strong risk flags detected in this run.";
+    if (leakageWarnings.length > 0) {
+        riskLine = `Leakage risk: ${leakageWarnings.length} warning(s). ${leakageWarnings[0]}`;
+    } else if (taskType === "classification" && classImbalance.is_imbalanced) {
+        const ratio = Number(classImbalance.imbalance_ratio || 0).toFixed(2);
+        riskLine = classWeightingApplied
+            ? `Class imbalance handled: ratio ${ratio}:1, weighted training applied.`
+            : `Class imbalance risk: ratio ${ratio}:1, consider enabling class weighting.`;
+    } else if (totalModels > 0 && overfitCount >= Math.ceil(totalModels * 0.4)) {
+        riskLine = `High variance risk: ${overfitCount}/${totalModels} models overfit.`;
+    } else if (totalModels > 0 && underfitCount >= Math.ceil(totalModels * 0.4)) {
+        riskLine = `High bias risk: ${underfitCount}/${totalModels} models underfit.`;
+    } else if (Number.isFinite(finalRows) && finalRows < 200) {
+        riskLine = `Small data warning: only ${finalRows} rows after cleaning.`;
+    }
+
+    const scopeLine = (Number.isFinite(originalRows) && Number.isFinite(finalRows))
+        ? `${originalRows.toLocaleString()} -> ${finalRows.toLocaleString()} rows, ${featureCount} features.`
+        : `${featureCount} features used in training.`;
+
+    executiveSummaryCard.innerHTML = `
+        <div class="exec-summary-grid">
+            <div class="exec-summary-item">
+                <div class="exec-summary-label">Target & Scope</div>
+                <div class="exec-summary-value">${escapeHtml(taskType.toUpperCase())}</div>
+                <div class="exec-summary-sub">${escapeHtml(finalRows || "?")} rows, ${escapeHtml(featureCount)} features trained</div>
             </div>
-            <div class="baseline-right">
-                <div class="baseline-beat" style="color:${beatColor}">
-                    ${beatIcon} ${beatCount}/${total} models beat the baseline
-                </div>
-                ${allBeat ? '<div class="baseline-note">All models outperform random prediction ✔</div>' : ''}
+            <div class="exec-summary-item">
+                <div class="exec-summary-label">Winner AI Model</div>
+                <div class="exec-summary-value">${escapeHtml(bestModel)}</div>
+                <div class="exec-summary-sub">Optimum tradeoff balance</div>
+            </div>
+            <div class="exec-summary-item">
+                <div class="exec-summary-label">Dataset Quality</div>
+                <div class="exec-summary-value" style="text-transform: uppercase;">${escapeHtml(recommendation.dataset_quality || "Unknown")}</div>
+                <div class="exec-summary-sub">${escapeHtml(recommendation.dataset_quality_desc || "No quality data available.")}</div>
+            </div>
+            <div class="exec-summary-item">
+                <div class="exec-summary-label">System Health</div>
+                <div class="exec-summary-value">${riskLine.includes("No strong") ? "Clear" : "Attention"}</div>
+                <div class="exec-summary-sub">${escapeHtml(riskLine)}</div>
             </div>
         </div>
     `;
-    container.style.display = "block";
 }
+
+
+
 
 
 // ─── RECOMMENDATION ────────────────────────────────────────────────────────
 
-function renderRecommendation(rec) {
-    bestModelBadge.innerHTML = `&#127942; ${escapeHtml(rec.best_model)}`;
+function renderRecommendation(rec, charts, taskType) {
+    // Emoji removed
+    bestModelBadge.innerHTML = escapeHtml(rec.best_model);
 
     // Format verdict: bold the section headers
     let v = escapeHtml(rec.verdict);
@@ -381,7 +683,82 @@ function renderRecommendation(rec) {
     v = v.replace(/(HIGH VARIANCE)/g, '<span style="color: var(--accent);">HIGH VARIANCE</span>');
     v = v.replace(/(LOW BIAS)/g, '<span style="color: var(--green);">LOW BIAS</span>');
     v = v.replace(/(LOW VARIANCE)/g, '<span style="color: var(--cyan);">LOW VARIANCE</span>');
+    
     verdictText.innerHTML = v;
+}
+
+function renderCvSummary(cvSummary, taskType) {
+    if (!cvSummaryCard) return;
+
+    const rows = Array.isArray(cvSummary) ? cvSummary : [];
+    if (rows.length === 0) {
+        cvSummaryCard.style.display = "none";
+        cvSummaryCard.innerHTML = "";
+        return;
+    }
+
+    const primaryLabel = taskType === "regression" ? "Cross-Validated R²" : "Cross-Validated F1 Score";
+    const secondaryLabel = taskType === "regression" ? "Cross-Validated RMSE" : "Cross-Validated Accuracy";
+
+    const isPct = taskType === "classification";
+
+    const body = rows.map((row) => {
+        const mean1 = Number(row.cv_primary_mean);
+        const std1 = Number(row.cv_primary_std);
+        const format1 = isPct ? `${(mean1 * 100).toFixed(1)}%` : formatMetric(mean1);
+        const formatErr1 = isPct ? `±${(std1 * 100).toFixed(1)}%` : `±${formatMetric(std1)}`;
+
+        const mean2 = Number(row.cv_secondary_mean);
+        const std2 = Number(row.cv_secondary_std);
+        const format2 = isPct ? `${(mean2 * 100).toFixed(1)}%` : formatMetric(mean2);
+        const formatErr2 = isPct ? `±${(std2 * 100).toFixed(1)}%` : `±${formatMetric(std2)}`;
+
+        const holdoutP = Number(row.holdout_primary);
+        const formatHoldout = isPct ? `${(holdoutP * 100).toFixed(1)}%` : formatMetric(holdoutP);
+        
+        const gap = Number(row.holdout_vs_cv_gap);
+        const gapStr = isPct ? `${gap >= 0 ? '+' : ''}${(gap * 100).toFixed(2)}%` : formatSignedMetric(gap);
+        
+        return `
+            <tr>
+                <td><strong>${escapeHtml(row.model_name)}</strong></td>
+                <td>
+                    <div style="font-size:1.05rem; font-family:'Outfit', sans-serif;">${format1}</div>
+                    <div style="font-size:0.8rem; color:var(--text-muted);">${formatErr1}</div>
+                </td>
+                <td>
+                    <div style="font-size:1.05rem; font-family:'Outfit', sans-serif;">${format2}</div>
+                    <div style="font-size:0.8rem; color:var(--text-muted);">${formatErr2}</div>
+                </td>
+                <td>
+                    <div style="font-size:1.05rem; font-family:'Outfit', sans-serif;">${formatHoldout}</div>
+                </td>
+                <td>
+                    <div style="font-size:1.05rem; font-family:'Outfit', sans-serif; color: ${Math.abs(gap) > 0.05 ? 'var(--color-warning)' : 'var(--text-secondary)'};">${gapStr}</div>
+                </td>
+            </tr>
+        `;
+    }).join("");
+
+    cvSummaryCard.innerHTML = `
+        <div class="cv-summary-title">Cross-Validation Summary (Top Models)</div>
+        <div class="cv-summary-table-wrap">
+            <table class="cv-summary-table">
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>${primaryLabel}</th>
+                        <th>${secondaryLabel}</th>
+                        <th>Holdout Primary</th>
+                        <th>Holdout - CV Gap</th>
+                    </tr>
+                </thead>
+                <tbody>${body}</tbody>
+            </table>
+        </div>
+        <div class="cv-summary-note">Small gap means the holdout score agrees with cross-validation. Large positive or negative gaps may indicate instability.</div>
+    `;
+    cvSummaryCard.style.display = "block";
 }
 
 
@@ -464,8 +841,10 @@ function buildTableBody(metrics, columns, bestModel) {
         const cells = columns.map(c => {
             let val = row[c.key];
             if (c.key === "fit_label") {
-                const cls = val === "good_fit" ? "fit-good" : val === "overfit" ? "fit-overfit" : "fit-underfit";
-                const label = val === "good_fit" ? "Good" : val === "overfit" ? "Overfit" : "Underfit";
+                const isOverfit = val === "overfit" || val === "highly_overfit" || val === "mildly_overfit";
+                const cls = val === "good_fit" ? "fit-good" : isOverfit ? "fit-overfit" : "fit-underfit";
+                let label = val === "good_fit" ? "Good Fit" : val === "highly_overfit" ? "High Overfit" : val === "mildly_overfit" ? "Mild Overfit" : "Underfit";
+                if (val === "overfit") label = "Overfit";
                 return `<td><span class="fit-badge ${cls}">${label}</span></td>`;
             }
             if (c.key === "model_name") {
@@ -531,9 +910,10 @@ function renderCharts(charts, cmStats) {
     chartsGrid.innerHTML = "";
 
     // Render in specified order, skip missing
-    const orderedKeys = CHART_ORDER.filter(k => k in charts);
+    const orderedKeys = CHART_ORDER.filter(k => k in charts && k !== "confusion_matrix");
     // Add any keys not in CHART_ORDER
     Object.keys(charts).forEach(k => {
+        if (k === "confusion_matrix") return;
         if (!orderedKeys.includes(k)) orderedKeys.push(k);
     });
 
@@ -543,16 +923,14 @@ function renderCharts(charts, cmStats) {
     }
 
     chartsGrid.innerHTML = `
-        <div class="chart-controls">
-            <div class="chart-controls-copy">
-                <strong>Focused chart view</strong>
-                <span>Select any graph and inspect it at a much larger size.</span>
-            </div>
-            <div class="chart-select-wrap">
-                <select id="chart-select"></select>
+        <div class="chart-controls" style="background: var(--bg-card); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); text-align: center;">
+            <div style="font-weight: 600; font-size: 1.1rem; color: var(--text-primary); margin-bottom: 0.25rem;">Visualizations</div>
+            <div style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.25rem;">Use the dropdown to inspect different charts for this model.</div>
+            <div style="max-width: 400px; margin: 0 auto;">
+                <select id="chart-select" class="form-control" style="width: 100%;"></select>
             </div>
         </div>
-        <div class="chart-stage" id="chart-stage"></div>
+        <div class="chart-stage" id="chart-stage" style="display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg-card); padding: 2.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); width: 100%;"></div>
     `;
 
     const select = document.getElementById("chart-select");
@@ -566,29 +944,37 @@ function renderCharts(charts, cmStats) {
         select.appendChild(option);
     });
 
+    const CHART_SUBTITLES = {
+        model_comparison:    "Compares test error (RMSE) or accuracy across all models. The highlighted bar is the recommended model.",
+        train_vs_test:       "Side-by-side train vs. test scores. A large gap between bars indicates overfitting — the model memorized training data but failed to generalize.",
+        r2_comparison:       "R\u00b2 score for each model on test data. Closer to 1.0 = excellent fit. Negative values mean the model performs worse than a straight mean prediction.",
+        f1_comparison:       "F1 Score comparison across all models. A large gap between Train F1 and Test F1 bars means the model overfit to the training classes.",
+        poly_complexity:     "How polynomial regression fits change as degree increases. Watch for test score rising sharply then dropping — that is overfitting starting.",
+        dt_complexity:       "Decision tree performance versus tree depth. Very deep trees tend to memorize training data (high train, low test score).",
+        knn_complexity:      "KNN performance for different values of k. Very low k overfits; very high k underfits by over-smoothing local patterns.",
+        predicted_vs_actual: "Each point is one test sample. Points on the diagonal = perfect predictions. Points far from it = large prediction errors.",
+        feature_importance:  "How much each feature contributed to the best model's predictions. Higher bar = more influential. Features near zero add almost no value.",
+        confusion_matrix:    "Shows how often each actual class was predicted correctly (diagonal) vs. confused with another class (off-diagonal). Higher diagonal = better.",
+        roc_curve:           "Trade-off between true positive rate and false positive rate. Closer to the top-left corner = stronger classifier.",
+    };
+
     const renderSelectedChart = (key) => {
         const friendlyName = CHART_NAMES[key] || key.replace(/_/g, " ");
         let insightHtml = "";
-        let stageClass = "chart-stage";
-
-        if (key === "confusion_matrix") {
-            stageClass += " chart-stage-matrix";
-        } else if (["poly_complexity", "dt_complexity", "knn_complexity"].includes(key)) {
-            stageClass += " chart-stage-compact";
-        }
 
         if (key === "confusion_matrix" && cmStats && cmStats.insights && cmStats.insights.length > 0) {
-            const bullets = cmStats.insights.map(s => `<li>${escapeHtml(s)}</li>`).join("");
-            insightHtml = `<ul class="cm-insights">${bullets}</ul>`;
+            const bullets = cmStats.insights.map(s => `<li style="margin-bottom:0.4rem;">${escapeHtml(s)}</li>`).join("");
+            insightHtml = `<ul class="cm-insights" style="margin-top: 1.5rem; color: var(--text-secondary); text-align: left; background: var(--bg-base); padding: 1rem 1.5rem; border-radius: var(--radius-sm);  list-style: disc inside;">${bullets}</ul>`;
         }
 
-        stage.className = stageClass;
+        const subtitle = CHART_SUBTITLES[key];
+        const subtitleHtml = subtitle
+            ? `<p style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted); text-align: center; max-width: 700px; line-height: 1.5;">${escapeHtml(subtitle)}</p>`
+            : "";
+
         stage.innerHTML = `
-            <div class="chart-stage-meta">
-                <strong>${escapeHtml(friendlyName)}</strong>
-                <span>Use the dropdown to switch visualizations</span>
-            </div>
-            <img src="data:image/png;base64,${charts[key]}" alt="${escapeHtml(friendlyName)}" loading="lazy">
+            <img src="data:image/png;base64,${charts[key]}" alt="${escapeHtml(friendlyName)}" style="max-width: 100%; height: auto; border: 1px solid var(--border-color); box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-radius: var(--radius-sm);">
+            ${subtitleHtml}
             ${insightHtml}
         `;
     };
@@ -596,7 +982,6 @@ function renderCharts(charts, cmStats) {
     select.addEventListener("change", () => renderSelectedChart(select.value));
     renderSelectedChart(orderedKeys[0]);
 }
-
 
 // ─── PREPROCESSING LOG ──────────────────────────────────────────────────────
 
@@ -608,7 +993,7 @@ function renderLog(log) {
             ${groups.map((group, index) => `
                 <div class="log-group">
                     <button
-                        class="log-group-header ${index === 0 ? "open" : ""}"
+                        class="log-group-header"
                         type="button"
                         onclick="toggleLogGroup(${index})"
                     >
@@ -618,22 +1003,24 @@ function renderLog(log) {
                             <span class="log-group-arrow">&#9660;</span>
                         </span>
                     </button>
-                    <div class="log-group-body ${index === 0 ? "open" : ""}" id="log-group-body-${index}">
-                        ${group.lines.map(line => `<div class="log-line">${escapeHtml(line)}</div>`).join("")}
+                    <div class="log-group-body" id="log-group-body-${index}">
+                        ${group.lines.length > 0
+                            ? group.lines.map(line => {
+                                // Strip out emojis
+                                let clean = line.replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]/g, '').trim();
+                                // Clean up array representations
+                                clean = clean.replace(/\[|\]|'/g, '');
+                                return `<div class="log-line" style="display:flex; align-items:start; gap:0.5rem; margin-bottom: 0.5rem;">
+                                    <span style="color:var(--text-muted);">&bull;</span>
+                                    <span>${escapeHtml(clean)}</span>
+                                </div>`;
+                              }).join("")
+                            : '<div class="log-line">No steps captured in this stage for this run.</div>'}
                     </div>
                 </div>
             `).join("")}
         </div>
     `;
-}
-
-function toggleLog() {
-    const content = logContent;
-    const toggle = document.getElementById("log-toggle");
-    content.classList.toggle("open");
-    toggle.innerHTML = content.classList.contains("open")
-        ? "&#9650; Hide preprocessing steps"
-        : "&#9660; Show preprocessing steps";
 }
 
 function toggleLogGroup(index) {
@@ -705,7 +1092,7 @@ function groupLogEntries(log) {
         buckets[4].lines.push(line);
     });
 
-    return buckets.filter(group => group.lines.length > 0);
+    return buckets;
 }
 
 function matchesAny(text, patterns) {
@@ -728,6 +1115,11 @@ function formatMetric(val) {
     return val.toFixed(4);
 }
 
+function formatSignedMetric(val) {
+    const sign = val >= 0 ? "+" : "-";
+    return `${sign}${formatMetric(Math.abs(val))}`;
+}
+
 function escapeHtml(str) {
     const div = document.createElement("div");
     div.textContent = str;
@@ -741,11 +1133,11 @@ function showError(msg) {
 
     const banner = document.createElement("div");
     banner.className = "error-banner global-error";
-    banner.textContent = "\u274C " + msg;
+    banner.textContent = "[ ERROR ] " + msg;
     banner.style.animation = "fadeInDown 0.3s ease-out";
 
-    const container = document.querySelector(".container");
-    container.insertBefore(banner, container.children[1]); // after header
+    const container = document.querySelector(".app-container");
+    if(container) container.insertBefore(banner, container.children[0]);
 
     setTimeout(() => {
         banner.style.opacity = "0";

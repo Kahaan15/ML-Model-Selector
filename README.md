@@ -1,144 +1,97 @@
-# ML Model Selector
+# ML Model Selector & Bias-Variance Analyzer
+A automated machine learning diagnostic tool that trains over 30 models from a single CSV upload and provides human-readable explanations of the bias-variance tradeoff.
 
-> Plug in any CSV — automatically trains 15+ ML models, compares bias-variance tradeoff, and recommends the best model with explanation.
+Built for students, researchers, and data scientists to move beyond "black box" machine learning and understand the root cause of model performance.
 
----
+## Features
+- Automated task detection: Identifies if your dataset requires Regression or Classification.
+- Comprehensive Model training: Audits 18 regression models or 15 classification models simultaneously.
+- Complexity Analysis: Compares model families across varying degrees of complexity (depth, k-neighbors, etc.).
+- Bias-Variance Diagnostics: Automatically flags models that are overfitting or underfitting.
+- Root Cause Inference: Rule-based engine that explains WHY the dataset is behaving a certain way.
+- Parallel Processing: High-performance training using scikit-learn pipelines.
+- Modern HUD Interface: Clean, professional dashboard for real-time interaction.
+- Zero Persistence: Processes all data in-memory or through temporary buffers for privacy.
 
-## What It Does
+## Requirements
+- Windows 10 or 11 (Recommended)
+- Python 3.8 or higher
+- Modern web browser (Chrome, Edge, or Firefox)
+- Internet connection (for initial library installation)
 
-Upload any CSV dataset and this system will:
+## Setup Guide
+### Step 1 — Install Python
+Ensure you have Python installed. You can check by running `python --version` in your terminal.
 
-- Auto-detect whether your problem is **regression or classification**
-- Train **18 regression models** or **15 classification models** at varying complexities
-- Compare **train vs test errors** across all models
-- Visualize the **bias-variance tradeoff** through interactive charts
-- **Recommend the best model** with a human-readable explanation of why
-
-The goal is educational — understanding *why* a model works, not just *that* it works.
-
----
-
-## Models Trained
-
-### Regression (18 models)
-- Linear Regression (baseline)
-- Polynomial Regression — degrees 2, 3, 4, 5
-- Decision Tree — depths 1, 3, 5, 10, unlimited
-- Ridge, Lasso (regularized linear)
-- Random Forest, SVR
-- KNN — k = 1, 3, 5, 10
-
-### Classification (15 models)
-- Logistic Regression (baseline)
-- Decision Tree — depths 1, 3, 5, 10, unlimited
-- Random Forest, Gradient Boosting
-- SVM — linear and RBF kernels
-- Naive Bayes
-- KNN — k = 1, 3, 5, 10
-
----
-
-## Charts Generated
-
-| Chart | Purpose |
-|---|---|
-| Model comparison | Test error side-by-side for all models |
-| Train vs Test error | Visualizes overfitting and underfitting |
-| Complexity curves | How error changes with model complexity (degree / depth / k) |
-| R² comparison | Goodness of fit across all models |
-| Predicted vs Actual | Scatter plot for the best model |
-| Confusion matrix | For classification tasks |
-
----
-
-## Project Structure
-
-```
-ml-model-selector/
-├── ml/
-│   ├── preprocessor.py     # Cleaning, encoding, scaling, train/test split
-│   ├── models.py           # All model training
-│   ├── metrics.py          # MSE, RMSE, R², Accuracy, F1, Precision, Recall
-│   ├── recommender.py      # Best model selection + verdict
-│   ├── visualize.py        # All charts as base64 PNGs
-│   ├── pipeline.py         # Single function that orchestrates everything
-│   └── test_pipeline.py    # End-to-end tests
-├── app.py                  # Flask backend
-├── frontend/
-│   ├── index.html          # Single-page UI
-│   └── charts.js           # Fetch, render charts, display results
-└── outputs/                # Generated charts (auto-created)
-```
-
----
-
-## Dataset Requirements
-
-| Property | Requirement |
-|---|---|
-| Format | CSV only |
-| Rows | 100 – 50,000 |
-| Features | 1 – 20 numerical columns |
-| Target | Pick from dropdown after upload |
-| Missing values | Handled automatically |
-
----
-
-## Installation
+### Step 2 — Install Required Libraries
+Open your Command Prompt or Terminal and run the following command to install the machine learning engine and server dependencies:
 
 ```bash
 pip install scikit-learn pandas numpy matplotlib flask
 ```
 
----
+### Step 3 — Download the Codebase
+Clone this repository to your local machine:
+```bash
+git clone https://github.com/your-username/ML-Model-Selector.git
+cd ML-Model-Selector
+```
 
-## Usage
-
-### Run the full web app
+## How to Use
+### Step 1 — Launch the Application
+Run the main application file from your terminal:
 ```bash
 python app.py
 ```
-Then open `http://localhost:5000` in your browser.
+You will see a message: `Server: http://localhost:5000`.
 
-### Run ML scripts standalone
-```bash
-python ml/preprocessor.py
-python ml/models.py
-python ml/metrics.py
-python ml/pipeline.py
-```
+### Step 2 — Access the Dashboard
+1. Open your web browser and go to `http://localhost:5000`.
+2. Click the Upload zone to select your CSV file.
+3. The system will automatically scan the columns.
+4. Select your "Target Column" from the dropdown.
+5. Select your "Task Type" (or leave it on Auto).
+6. Click "Run Diagnostic Analysis".
 
-Each script has a built-in test that runs automatically.
+### Step 3 — Review the Verdict
+Once processing is complete, the dashboard will update with:
+1. The Executive Summary identifying the best model.
+2. The detailed "Verdict" explaining the bias-variance tradeoff.
+3. Interactive charts showing complexity curves and error distributions.
+4. A full ranking table of every model tested.
 
----
+## Dataset Requirements
+To ensure accurate diagnostic results, your CSV should follow these properties:
+- Format: Standard .csv files only.
+- Rows: Between 100 and 50,000 rows.
+- Features: Up to 20 numerical or categorical columns.
+- Missing Values: Automatically handled, but lower amounts provide better results.
 
-## How It Works
+## Project Structure
+The project is organized into a modular ML engine and a modern web interface:
+- ml/preprocessor.py: Data cleaning and train/test splitting.
+- ml/models.py: Core training logic for all 33+ models.
+- ml/metrics.py: Performance calculation and fit labeling.
+- ml/recommender.py: The expert system for ranking and verdicts.
+- ml/visualize.py: Memory-based chart generation.
+- app.py: Flask server and API handler.
+- frontend/: User interface assets (HTML, JS, CSS).
 
-```
-CSV Upload
-    ↓
-preprocessor.py   →   cleans, encodes, scales, splits
-    ↓
-models.py         →   trains 18 or 15 models
-    ↓
-metrics.py        →   computes MSE, R², F1, fit labels
-    ↓
-recommender.py    →   ranks models, generates verdict
-    ↓
-visualize.py      →   generates all charts
-    ↓
-Flask + Frontend  →   displays everything
-```
+## Troubleshooting
+- "Dataset too large": The system is capped at 50,000 rows to ensure fast browser response. Use a subset of your data if needed.
+- "Negative R2 score": This usually means the dataset has very heavy noise or no predictive features — check the "Root Cause Analysis" section for more info.
+- "Server not starting": Ensure no other application is using Port 5000.
+- "Column not appearing": Reload the page and ensure the CSV header is in the first row of your file.
 
-The Flask backend is a thin wrapper — it imports `pipeline.py` and exposes it as an API endpoint. All ML logic lives entirely in the `ml/` scripts.
+## Built With
+- Scikit-Learn: Machine learning models and preprocessing.
+- Matplotlib: Statistical data visualization.
+- Flask: Backend API and server.
+- Pandas & NumPy: High-performance data manipulation.
+- Vanilla JavaScript: Dynamic HUD interface logic.
 
----
+## Author
+Made by a BTech student to simplify machine learning diagnostics and help students master the concept of the bias-variance tradeoff.
 
-## Tech Stack
-
-- **ML:** scikit-learn, numpy, pandas
-- **Charts:** matplotlib
-- **Backend:** Flask
-- **Frontend:** HTML, CSS, JavaScript
-
----
+## License
+MIT License — free to use, modify, and distribute for educational or professional purposes.

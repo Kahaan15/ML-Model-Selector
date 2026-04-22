@@ -40,6 +40,7 @@ HIGH_CARDINALITY_LIMIT   = 0.95         # drop a categorical col if unique% > th
 OUTLIER_IQR_MULTIPLIER   = 3.0          # very conservative: only removes extreme outliers
 NEAR_ZERO_VAR_THRESHOLD  = 1e-6         # columns with variance below this are dropped
 CORR_DROP_THRESHOLD      = 0.98         # drop one of a perfectly-correlated pair
+LEAKAGE_CORR_THRESHOLD   = 0.995        # warn when feature-target correlation is almost perfect
 
 
 # ─────────────────────────────────────────────
@@ -60,6 +61,8 @@ class PreprocessResult:
     n_classes:        int               # 0 for regression
     class_labels:     list              # [] for regression
     class_balance:    dict              # {} for regression
+    class_imbalance:  dict              # {} for regression
+    leakage_warnings: list              # potential leakage warnings
 
     # Fitted objects (needed if we want to inverse-transform predictions later)
     scaler:           StandardScaler
@@ -100,7 +103,7 @@ def preprocess(
     # ── 1. LOAD ──────────────────────────────────────────────────────────────
     df = _load(source, log)
     original_shape = df.shape
-    log.append(f"✅ Loaded dataset: {original_shape[0]} rows × {original_shape[1]} columns.")
+    log.append(f"Loaded dataset: {original_shape[0]} rows × {original_shape[1]} columns.")
 
     # ── 2. IDENTIFY TARGET ────────────────────────────────────────────────────
     target_column = _resolve_target(df, target_column, log)
@@ -130,7 +133,7 @@ def preprocess(
     df = df.drop_duplicates()
     removed = before - len(df)
     if removed:
-        log.append(f"🔁 Removed {removed} duplicate rows.")
+        log.append(f"Removed {removed} duplicate rows.")
 
     # ── 9. DROP NEAR-ZERO VARIANCE FEATURES ───────────────────────────────────
     df = _drop_near_zero_variance(df, target_column, log)
@@ -141,6 +144,17 @@ def preprocess(
     # ── 11. DETECT / VALIDATE TASK TYPE ───────────────────────────────────────
     task_type, n_classes, class_labels = _detect_task(df, target_column, task_type, log)
 
+    # ── 11b. LEAKAGE RISK CHECK (warn-only) ───────────────────────────────
+    leakage_warnings = _detect_leakage_risks(df, target_column, task_type, log)
+
+    # ── 11c. TARGET SKEWNESS CHECK (regression only) ──────────────────────
+    if task_type == "regression":
+        _check_target_skewness(df, target_column, log)
+
+    # ── 11d. WEAK FEATURE CORRELATION CHECK ───────────────────────────
+    if task_type == "regression" and len(df.select_dtypes(include=[np.number]).columns) > 1:
+        _check_feature_correlation(df, target_column, log)
+
     # ── 12. OUTLIER CLIPPING (features only, regression only) ─────────────────
     if task_type == "regression":
         df = _clip_outliers(df, target_column, log)
@@ -150,6 +164,7 @@ def preprocess(
     y = df[target_column].copy()
     feature_names = list(X.columns)
     class_balance = {}
+    class_imbalance = {}
 
     # ── 14. ENCODE TARGET FOR CLASSIFICATION ──────────────────────────────────
     label_encoder = None
@@ -159,11 +174,21 @@ def preprocess(
             str(label): round(float(count / len(y)), 4)
             for label, count in label_counts.items()
         }
+        class_imbalance = _summarize_class_imbalance(label_counts)
 
         le = LabelEncoder()
         y = pd.Series(le.fit_transform(y.astype(str)), name=target_column)
         label_encoder = le
-        log.append(f"🏷️  Target encoded: {list(le.classes_)} → {list(range(len(le.classes_)))}")
+        log.append(f"Target encoded: {list(le.classes_)} → {list(range(len(le.classes_)))}")
+        if class_imbalance.get("is_imbalanced"):
+            log.append(
+                "  Class imbalance detected: "
+                f"majority={class_imbalance['majority_label']} ({class_imbalance['majority_ratio']*100:.1f}%), "
+                f"minority={class_imbalance['minority_label']} ({class_imbalance['minority_ratio']*100:.1f}%), "
+                f"ratio={class_imbalance['imbalance_ratio']:.2f}."
+            )
+        else:
+            log.append(f"Class balance check: distribution is reasonably balanced.")
 
     # ── 15. SANITY CHECK ──────────────────────────────────────────────────────
     _sanity_check(X, y, log)
@@ -181,20 +206,20 @@ def preprocess(
         random_state=random_state,
         stratify=stratify,
     )
-    log.append(f"✂️  Train/test split: {len(X_train)} train / {len(X_test)} test  ({int((1-test_size)*100)}/{int(test_size*100)})")
+    log.append(f"Train/test split: {len(X_train)} train / {len(X_test)} test  ({int((1-test_size)*100)}/{int(test_size*100)})")
 
     # ── 17. FEATURE SCALING (fit on train, transform both) ────────────────────
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled  = scaler.transform(X_test)
-    log.append(f"📐 Features standardised (StandardScaler fit on training set only).")
+    log.append(f"Features standardised (StandardScaler fit on training set only).")
 
     # ── 18. FINAL SUMMARY ─────────────────────────────────────────────────────
     final_shape = (len(df), len(feature_names) + 1)
-    log.append(f"🎯 Task type : {task_type.upper()}")
-    log.append(f"🎯 Target    : '{target_column}'")
-    log.append(f"📊 Features  : {len(feature_names)}  →  {feature_names}")
-    log.append(f"📦 Final dataset: {final_shape[0]} rows × {final_shape[1]} columns (incl. target).")
+    log.append(f"Task type : {task_type.upper()}")
+    log.append(f"Target    : '{target_column}'")
+    log.append(f"Features  : {len(feature_names)}  →  {feature_names}")
+    log.append(f"Final dataset: {final_shape[0]} rows × {final_shape[1]} columns (incl. target).")
 
     return PreprocessResult(
         X_train        = X_train_scaled,
@@ -207,6 +232,8 @@ def preprocess(
         n_classes      = n_classes,
         class_labels   = class_labels,
         class_balance  = class_balance,
+        class_imbalance = class_imbalance,
+        leakage_warnings = leakage_warnings,
         scaler         = scaler,
         label_encoder  = label_encoder,
         log            = log,
@@ -256,14 +283,14 @@ def _fix_column_names(df: pd.DataFrame, log) -> pd.DataFrame:
     df.columns = [c.strip().replace(" ", "_").replace("-", "_").lower() for c in df.columns]
     changed = [(o, n) for o, n in zip(original, df.columns) if o != n]
     if changed:
-        log.append(f"🔤 Renamed {len(changed)} column(s) for consistency (e.g. '{changed[0][0]}' → '{changed[0][1]}').")
+        log.append(f"Renamed {len(changed)} column(s) for consistency (e.g. '{changed[0][0]}' → '{changed[0][1]}').")
     return df
 
 
 def _resolve_target(df: pd.DataFrame, target_column, log) -> str:
     if target_column is None:
         target_column = df.columns[-1]
-        log.append(f"🎯 No target specified — using last column: '{target_column}'.")
+        log.append(f"No target specified — using last column: '{target_column}'.")
     else:
         # Be forgiving: try exact match first, then case-insensitive
         cleaned = _safe_col_name(target_column)
@@ -291,7 +318,7 @@ def _force_encode_remaining(df: pd.DataFrame, target: str, log) -> pd.DataFrame:
         le = LabelEncoder()
         df[col] = le.fit_transform(df[col].astype(str))
     if remaining:
-        log.append(f"🔢 Force-encoded remaining object columns: {remaining}")
+        log.append(f"Force-encoded remaining object columns: {remaining}")
     return df
 
 
@@ -319,7 +346,7 @@ def _drop_id_like_columns(df: pd.DataFrame, target: str, log) -> pd.DataFrame:
 
     if to_drop:
         df = df.drop(columns=to_drop)
-        log.append(f"🗑️  Dropped ID-like columns: {to_drop}")
+        log.append(f"Dropped ID-like columns: {to_drop}")
     return df
 
 
@@ -335,7 +362,7 @@ def _drop_non_numeric_high_cardinality(df: pd.DataFrame, target: str, log) -> pd
                 to_drop.append(col)
     if to_drop:
         df = df.drop(columns=to_drop)
-        log.append(f"🗑️  Dropped high-cardinality text columns (>{int(HIGH_CARDINALITY_LIMIT*100)}% unique): {to_drop}")
+        log.append(f"Dropped high-cardinality text columns (>{int(HIGH_CARDINALITY_LIMIT*100)}% unique): {to_drop}")
     return df
 
 
@@ -353,7 +380,7 @@ def _encode_low_cardinality_categoricals(df: pd.DataFrame, target: str, log) -> 
             df[col] = le.fit_transform(df[col].astype(str))
             encoded.append(col)
     if encoded:
-        log.append(f"🔢 Label-encoded low-cardinality categorical features: {encoded}")
+        log.append(f"Label-encoded low-cardinality categorical features: {encoded}")
     return df
 
 
@@ -371,14 +398,14 @@ def _handle_missing(df: pd.DataFrame, target: str, log) -> pd.DataFrame:
     to_drop = [c for c in df.columns if c != target and missing_ratio[c] > threshold]
     if to_drop:
         df = df.drop(columns=to_drop)
-        log.append(f"🗑️  Dropped columns with >{int(threshold*100)}% missing values: {to_drop}")
+        log.append(f"Dropped columns with >{int(threshold*100)}% missing values: {to_drop}")
 
     # Drop rows where target is missing
     before = len(df)
     df = df.dropna(subset=[target])
     dropped = before - len(df)
     if dropped:
-        log.append(f"🗑️  Dropped {dropped} rows with missing target values.")
+        log.append(f"Dropped {dropped} rows with missing target values.")
 
     # Fill remaining missing values
     total_filled = 0
@@ -395,7 +422,7 @@ def _handle_missing(df: pd.DataFrame, target: str, log) -> pd.DataFrame:
         total_filled += n_missing
 
     if total_filled:
-        log.append(f"🩹 Imputed {total_filled} missing value(s) across feature columns (median for numeric, mode for categorical).")
+        log.append(f"Imputed {total_filled} missing value(s) across feature columns (median for numeric, mode for categorical).")
 
     return df
 
@@ -421,7 +448,7 @@ def _enforce_feature_limit(df: pd.DataFrame, target: str, log) -> pd.DataFrame:
     df = df[[target] + keep] if target in df.columns else df[keep]
     # Preserve target in df
     log.append(
-        f"✂️  Too many features ({len(features)}). "
+        f"  Too many features ({len(features)}). "
         f"Kept top {MAX_FEATURES_ALLOWED} most correlated with target. "
         f"Dropped: {dropped[:5]}{'...' if len(dropped) > 5 else ''}"
     )
@@ -439,7 +466,7 @@ def _drop_near_zero_variance(df: pd.DataFrame, target: str, log) -> pd.DataFrame
                 to_drop.append(col)
     if to_drop:
         df = df.drop(columns=to_drop)
-        log.append(f"🗑️  Dropped near-zero variance columns (constant or near-constant): {to_drop}")
+        log.append(f"Dropped near-zero variance columns (constant or near-constant): {to_drop}")
     return df
 
 
@@ -471,7 +498,7 @@ def _drop_highly_correlated(df: pd.DataFrame, target: str, log) -> pd.DataFrame:
     to_drop = list(to_drop)
     if to_drop:
         df = df.drop(columns=to_drop)
-        log.append(f"🔗 Dropped {len(to_drop)} highly correlated feature(s) (|r| > {CORR_DROP_THRESHOLD}): {to_drop}")
+        log.append(f"Dropped {len(to_drop)} highly correlated feature(s) (|r| > {CORR_DROP_THRESHOLD}): {to_drop}")
     return df
 
 
@@ -493,7 +520,7 @@ def _detect_task(df, target, task_type_override, log):
         task_type = task_type_override.lower()
         assert task_type in ("regression", "classification"), \
             "task_type must be 'regression' or 'classification'"
-        log.append(f"⚙️  Task type manually set to: {task_type.upper()}")
+        log.append(f"Task type manually set to: {task_type.upper()}")
     else:
         is_float_col   = pd.api.types.is_float_dtype(col)
         is_int_col     = pd.api.types.is_integer_dtype(col)
@@ -505,25 +532,200 @@ def _detect_task(df, target, task_type_override, log):
             task_type = "classification"
         elif is_int_col and n_unique <= CLASSIFICATION_THRESHOLD:
             task_type = "classification"
-        elif is_int_col and (n_unique / max(len(col), 1)) < 0.05:
-            # Many rows but very few unique int values → classification (e.g. 0/1, 1-5 ratings)
-            task_type = "classification"
         else:
             task_type = "regression"
 
         log.append(
-            f"🤖 Auto-detected task type: {task_type.upper()} "
+            f" Auto-detected task type: {task_type.upper()} "
             f"(target '{target}' has {n_unique} unique values, dtype={col.dtype})."
         )
 
     if task_type == "classification":
         class_labels = sorted(col.dropna().unique().tolist())
         n_classes    = len(class_labels)
-        log.append(f"🏷️  Classes found: {class_labels} ({n_classes} total)")
+        log.append(f"Classes found: {class_labels} ({n_classes} total)")
         if n_classes < 2:
             raise ValueError(f"Classification requires at least 2 classes. Only found: {class_labels}")
 
     return task_type, n_classes, class_labels
+
+
+def _detect_leakage_risks(df: pd.DataFrame, target: str, task_type: str, log) -> list:
+    """
+    Warn about potential target leakage without dropping any columns.
+    Heuristics include:
+      - feature names suspiciously similar to target name
+      - exact feature == target copies
+      - near-perfect numeric correlation with target (regression)
+      - one-to-one feature/target mapping
+    """
+    warnings_list = []
+    feature_cols = [c for c in df.columns if c != target]
+
+    target_norm = "".join(ch for ch in target.lower() if ch.isalnum())
+    for col in feature_cols:
+        col_norm = "".join(ch for ch in col.lower() if ch.isalnum())
+        if not col_norm or not target_norm:
+            continue
+        if target_norm in col_norm or col_norm in target_norm:
+            warnings_list.append(
+                f"Feature '{col}' looks name-related to target '{target}' and may leak target information."
+            )
+
+    for col in feature_cols:
+        try:
+            if df[col].equals(df[target]):
+                warnings_list.append(
+                    f"Feature '{col}' is an exact copy of target '{target}' (direct leakage)."
+                )
+        except Exception:
+            continue
+
+    if task_type == "regression" and pd.api.types.is_numeric_dtype(df[target]):
+        numeric_features = [
+            c for c in feature_cols
+            if pd.api.types.is_numeric_dtype(df[c])
+        ]
+        for col in numeric_features:
+            corr = df[col].corr(df[target])
+            if pd.notna(corr) and abs(float(corr)) >= LEAKAGE_CORR_THRESHOLD:
+                warnings_list.append(
+                    f"Feature '{col}' has near-perfect correlation with target (|r|={abs(float(corr)):.4f})."
+                )
+
+    target_unique = int(df[target].nunique(dropna=True))
+    if target_unique > 1:
+        for col in feature_cols:
+            if int(df[col].nunique(dropna=True)) != target_unique:
+                continue
+            pair_unique = df[[col, target]].dropna().drop_duplicates().shape[0]
+            if pair_unique == target_unique:
+                warnings_list.append(
+                    f"Feature '{col}' maps one-to-one with target classes/values and may leak target identity."
+                )
+
+    # Keep warnings concise and stable for UI display.
+    deduped = []
+    for message in warnings_list:
+        if message not in deduped:
+            deduped.append(message)
+    deduped = deduped[:8]
+
+    if deduped:
+        log.append(f"Potential leakage risk detected in {len(deduped)} feature(s).")
+        for message in deduped[:3]:
+            log.append(f"Leakage check: {message}")
+    else:
+        log.append(f"Leakage check: no obvious leakage patterns detected.")
+
+    return deduped
+
+
+def _check_target_skewness(df: pd.DataFrame, target: str, log) -> None:
+    """
+    Warn if the regression target is highly skewed.
+    Highly skewed targets cause models to predict poorly on the long tail
+    and inflate RMSE. Log transformation is usually the fix.
+    """
+    if not pd.api.types.is_numeric_dtype(df[target]):
+        return
+
+    skew = float(df[target].skew())
+    if abs(skew) > 2.0:
+        direction = "right (positive)" if skew > 0 else "left (negative)"
+        log.append(
+            f"[ WARN ] Target skewness: '{target}' is highly skewed ({skew:.2f}, {direction}). "
+            "Consider applying a log transformation to the target before training "
+            "to improve prediction accuracy, especially for tail values."
+        )
+    elif abs(skew) > 1.0:
+        log.append(
+            f"[ WARN ] Target skewness: '{target}' shows moderate skew ({skew:.2f}). "
+            "This may cause models to underperform on extreme values."
+        )
+    else:
+        log.append(f"Target skewness check: '{target}' is approximately symmetric (skew={skew:.2f}).")
+
+
+def _check_feature_correlation(df: pd.DataFrame, target: str, log) -> None:
+    """
+    Warn if no feature has a meaningful correlation with the target.
+    This is a signal that the dataset may lack predictive power entirely.
+    """
+    if not pd.api.types.is_numeric_dtype(df[target]):
+        return
+
+    numeric_features = [
+        c for c in df.columns
+        if c != target and pd.api.types.is_numeric_dtype(df[c])
+    ]
+    if not numeric_features:
+        return
+
+    correlations = {col: abs(float(df[col].corr(df[target]))) for col in numeric_features}
+    correlations = {k: v for k, v in correlations.items() if pd.notna(v)}
+    if not correlations:
+        return
+
+    max_corr = max(correlations.values())
+    best_feature = max(correlations, key=correlations.get)
+
+    if max_corr < 0.10:
+        log.append(
+            f"[ WARN ] Weak feature correlation: No feature has a meaningful correlation "
+            f"with the target (max |r|={max_corr:.3f}). Models are likely to perform poorly. "
+            "Consider adding more relevant features or checking if the target column is correct."
+        )
+    elif max_corr < 0.30:
+        log.append(
+            f"[ WARN ] Low feature correlation: Strongest predictor is '{best_feature}' "
+            f"with |r|={max_corr:.3f}. Predictions may be noisy. "
+            "Feature engineering or additional data could improve performance."
+        )
+    else:
+        log.append(
+            f"Feature correlation check: Strongest predictor is '{best_feature}' "
+            f"(|r|={max_corr:.3f} with target)."
+        )
+
+
+def _summarize_class_imbalance(label_counts: pd.Series) -> dict:
+    """Summarize class imbalance so training policy can react transparently."""
+    if label_counts is None or label_counts.empty:
+        return {}
+
+    total = int(label_counts.sum())
+    sorted_counts = label_counts.sort_values(ascending=False)
+
+    majority_label = str(sorted_counts.index[0])
+    minority_label = str(sorted_counts.index[-1])
+    majority_count = int(sorted_counts.iloc[0])
+    minority_count = int(sorted_counts.iloc[-1])
+
+    majority_ratio = float(majority_count / total) if total > 0 else 0.0
+    minority_ratio = float(minority_count / total) if total > 0 else 0.0
+    imbalance_ratio = float(majority_count / max(1, minority_count))
+
+    # Conservative default threshold to avoid over-triggering weighting.
+    is_imbalanced = majority_ratio >= 0.70 or imbalance_ratio >= 2.5
+    if majority_ratio >= 0.80 or imbalance_ratio >= 4.0:
+        severity = "high"
+    elif is_imbalanced:
+        severity = "medium"
+    else:
+        severity = "low"
+
+    return {
+        "majority_label": majority_label,
+        "minority_label": minority_label,
+        "majority_count": majority_count,
+        "minority_count": minority_count,
+        "majority_ratio": round(majority_ratio, 4),
+        "minority_ratio": round(minority_ratio, 4),
+        "imbalance_ratio": round(imbalance_ratio, 4),
+        "is_imbalanced": bool(is_imbalanced),
+        "severity": severity,
+    }
 
 
 def _clip_outliers(df: pd.DataFrame, target: str, log) -> pd.DataFrame:
@@ -547,7 +749,7 @@ def _clip_outliers(df: pd.DataFrame, target: str, log) -> pd.DataFrame:
             clipped_cols.append(f"{col}({n_clipped})")
 
     if clipped_cols:
-        log.append(f"✂️  Clipped extreme outliers (IQR×{OUTLIER_IQR_MULTIPLIER}) in: {clipped_cols}")
+        log.append(f"Clipped extreme outliers (IQR×{OUTLIER_IQR_MULTIPLIER}) in: {clipped_cols}")
     return df
 
 
@@ -567,74 +769,6 @@ def _sanity_check(X, y, log):
     if y.isnull().any():
         raise ValueError("Target column still contains NaN values after cleaning. Cannot train.")
 
-    log.append(f"✅ Sanity check passed: {X.shape[0]} rows, {X.shape[1]} features, 0 nulls.")
+    log.append(f"Sanity check passed: {X.shape[0]} rows, {X.shape[1]} features, 0 nulls.")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# QUICK TEST  (run: python preprocessor.py)
-# ─────────────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    import io
-
-    # ── Regression test ──────────────────────────────────────────────────────
-    reg_csv = """id,age,salary,experience,years_education,department,target_income
-1,25,50000,2,16,Engineering,55000
-2,32,75000,8,18,Marketing,80000
-3,28,60000,5,16,Engineering,65000
-4,45,95000,20,20,Management,100000
-5,38,85000,14,18,Engineering,90000
-6,29,62000,6,16,Marketing,67000
-7,52,110000,28,22,Management,115000
-8,35,78000,11,18,Engineering,83000
-9,26,53000,3,16,Marketing,58000
-10,41,92000,17,20,Engineering,97000
-11,33,72000,9,18,Management,77000
-12,27,56000,4,16,Engineering,61000
-13,48,105000,24,20,Marketing,110000
-14,36,81000,12,18,Engineering,86000
-15,30,67000,7,16,Management,72000"""
-
-    print("=" * 60)
-    print("TEST 1: REGRESSION")
-    print("=" * 60)
-    result = preprocess(io.StringIO(reg_csv), target_column="target_income")
-    for line in result.log:
-        print(line)
-    print(f"\nX_train shape : {result.X_train.shape}")
-    print(f"X_test  shape : {result.X_test.shape}")
-    print(f"Features      : {result.feature_names}")
-    print(f"Task          : {result.task_type}")
-
-    # ── Classification test ──────────────────────────────────────────────────
-    clf_csv = """sepal_length,sepal_width,petal_length,petal_width,species
-5.1,3.5,1.4,0.2,setosa
-4.9,3.0,1.4,0.2,setosa
-6.7,3.1,4.7,1.5,versicolor
-6.3,3.3,6.0,2.5,virginica
-5.8,2.7,5.1,1.9,virginica
-5.7,2.8,4.5,1.3,versicolor
-6.4,3.2,4.5,1.5,versicolor
-5.2,3.5,1.5,0.2,setosa
-7.7,3.8,6.7,2.2,virginica
-5.5,2.4,3.8,1.1,versicolor
-4.6,3.1,1.5,0.2,setosa
-6.9,3.1,5.1,2.3,virginica
-5.0,3.4,1.5,0.2,setosa
-6.1,2.9,4.7,1.4,versicolor
-7.2,3.2,6.0,1.8,virginica
-5.4,3.7,1.5,0.2,setosa
-6.5,3.0,5.5,1.8,virginica
-5.6,2.9,3.6,1.3,versicolor
-4.8,3.4,1.6,0.2,setosa
-7.4,2.8,6.1,1.9,virginica"""
-
-    print("\n" + "=" * 60)
-    print("TEST 2: CLASSIFICATION")
-    print("=" * 60)
-    result2 = preprocess(io.StringIO(clf_csv), target_column="species")
-    for line in result2.log:
-        print(line)
-    print(f"\nX_train shape : {result2.X_train.shape}")
-    print(f"X_test  shape : {result2.X_test.shape}")
-    print(f"Classes       : {result2.class_labels}")
-    print(f"Task          : {result2.task_type}")

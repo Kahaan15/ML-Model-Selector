@@ -43,20 +43,6 @@ MAX_FEATURES = 20
 ALLOWED_EXTENSIONS = {".csv"}
 
 
-def _parse_optional_int(value, field_name, min_value=1, max_value=100):
-    """Parse optional integer form fields with range validation."""
-    if value is None or value == "":
-        return None
-
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must be an integer.") from exc
-
-    if parsed < min_value or parsed > max_value:
-        raise ValueError(f"{field_name} must be between {min_value} and {max_value}.")
-
-    return parsed
 
 
 # ─────────────────────────────────────────────
@@ -171,6 +157,10 @@ def upload():
         # ── Read parameters ──────────────────────────────────────────────────
         target_column = request.form.get("target_column", None)
         task_type = request.form.get("task_type", None)
+        class_weight_mode = (request.form.get("class_weight_mode", "off") or "off").lower()
+
+        if class_weight_mode not in {"off", "on"}:
+            return jsonify({"error": "class_weight_mode must be one of: off, on."}), 400
 
         # "auto" means let preprocessor decide
         if task_type == "auto" or task_type == "":
@@ -195,6 +185,7 @@ def upload():
                 tmp_path,
                 target_column=target_column,
                 task_type=task_type,
+                class_weight_mode=class_weight_mode,
             )
 
             return jsonify(result)

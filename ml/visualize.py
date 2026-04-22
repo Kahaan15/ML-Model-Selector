@@ -294,7 +294,7 @@ def _fig_to_base64(fig) -> str:
 
 def _bar_chart(names, values, title, ylabel, highlight=None) -> str:
     """Single bar chart with optional highlight on the best model."""
-    fig, ax = plt.subplots(figsize=(max(10, len(names) * 0.7), 5))
+    fig, ax = plt.subplots(figsize=(max(12, len(names) * 1.0), 5.5))
 
     colors = [COLOR_BEST if n == highlight else COLOR_BAR for n in names]
     bars = ax.bar(range(len(names)), values, color=colors, edgecolor="#d1d5db", linewidth=0.5)
@@ -305,19 +305,21 @@ def _bar_chart(names, values, title, ylabel, highlight=None) -> str:
     ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
     ax.grid(axis="y", linestyle="--")
 
-    # Value labels on bars
+    # Value labels on bars — use compact scientific notation for very large numbers
+    max_val = max(abs(v) for v in values) if values else 1
     for bar, val in zip(bars, values):
+        label = f"{val:.2e}" if max_val > 1e5 else f"{val:.4f}"
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"{val:.4f}", ha="center", va="bottom", fontsize=7, color="#111827")
+                label, ha="center", va="bottom", fontsize=6.5, color="#111827")
 
-    fig.tight_layout()
+    fig.tight_layout(pad=1.5)
     return _fig_to_base64(fig)
 
 
 def _grouped_bar(names, values1, values2, label1, label2,
                  title, ylabel) -> str:
     """Grouped bar chart comparing two metrics side by side."""
-    fig, ax = plt.subplots(figsize=(max(10, len(names) * 0.8), 5))
+    fig, ax = plt.subplots(figsize=(max(12, len(names) * 1.0), 5.5))
 
     x = np.arange(len(names))
     width = 0.35
@@ -334,7 +336,7 @@ def _grouped_bar(names, values1, values2, label1, label2,
     ax.legend(loc="upper right", framealpha=0.8)
     ax.grid(axis="y", linestyle="--")
 
-    fig.tight_layout()
+    fig.tight_layout(pad=1.5)
     return _fig_to_base64(fig)
 
 
@@ -496,114 +498,5 @@ def _confusion_matrix_chart(y_true, y_pred, class_labels, title) -> str:
     return _fig_to_base64(fig)
 
 
-# ─────────────────────────────────────────────
-# SAVE CHARTS TO DISK (standalone mode)
-# ─────────────────────────────────────────────
-def save_charts_to_disk(charts: dict, output_dir: str):
-    """Decode base64 charts and save as PNG files."""
-    import os
-    os.makedirs(output_dir, exist_ok=True)
-    for name, b64 in charts.items():
-        filepath = os.path.join(output_dir, f"{name}.png")
-        with open(filepath, "wb") as f:
-            f.write(base64.b64decode(b64))
-    return output_dir
 
 
-# ─────────────────────────────────────────────
-# QUICK TEST  (run: python visualize.py)
-# ─────────────────────────────────────────────
-if __name__ == "__main__":
-    import sys
-    import os
-
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from preprocessor import preprocess
-    from models import train_all_models
-    from metrics import compute_metrics
-    from recommender import recommend
-
-    # ── Test 1: Regression ───────────────────────────────────────────────────
-    reg_csv = """id,age,salary,experience,years_education,department,target_income
-1,25,50000,2,16,Engineering,55000
-2,32,75000,8,18,Marketing,80000
-3,28,60000,5,16,Engineering,65000
-4,45,95000,20,20,Management,100000
-5,38,85000,14,18,Engineering,90000
-6,29,62000,6,16,Marketing,67000
-7,52,110000,28,22,Management,115000
-8,35,78000,11,18,Engineering,83000
-9,26,53000,3,16,Marketing,58000
-10,41,92000,17,20,Engineering,97000
-11,33,72000,9,18,Management,77000
-12,27,56000,4,16,Engineering,61000
-13,48,105000,24,20,Marketing,110000
-14,36,81000,12,18,Engineering,86000
-15,30,67000,7,16,Management,72000"""
-
-    print("=" * 60)
-    print("TEST 1: REGRESSION CHARTS")
-    print("=" * 60)
-
-    result = preprocess(io.StringIO(reg_csv), target_column="target_income", task_type="regression")
-    models = train_all_models(result)
-    models = {k: v for k, v in models.items() if v is not None}
-    metrics_df = compute_metrics(models, result)
-    rec = recommend(metrics_df)
-
-    charts = generate_charts(result, models, metrics_df, rec["best_model"])
-    print(f"\nCharts generated: {len(charts)}")
-    for name, b64 in charts.items():
-        print(f"  {name:25s} -> {len(b64):,} chars (base64)")
-
-    # Save to outputs/regression/
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs", "regression")
-    save_charts_to_disk(charts, out_dir)
-    print(f"\nSaved to: {os.path.abspath(out_dir)}")
-
-    # ── Test 2: Classification ───────────────────────────────────────────────
-    clf_csv = """sepal_length,sepal_width,petal_length,petal_width,species
-5.1,3.5,1.4,0.2,setosa
-4.9,3.0,1.4,0.2,setosa
-6.7,3.1,4.7,1.5,versicolor
-6.3,3.3,6.0,2.5,virginica
-5.8,2.7,5.1,1.9,virginica
-5.7,2.8,4.5,1.3,versicolor
-6.4,3.2,4.5,1.5,versicolor
-5.2,3.5,1.5,0.2,setosa
-7.7,3.8,6.7,2.2,virginica
-5.5,2.4,3.8,1.1,versicolor
-4.6,3.1,1.5,0.2,setosa
-6.9,3.1,5.1,2.3,virginica
-5.0,3.4,1.5,0.2,setosa
-6.1,2.9,4.7,1.4,versicolor
-7.2,3.2,6.0,1.8,virginica
-5.4,3.7,1.5,0.2,setosa
-6.5,3.0,5.5,1.8,virginica
-5.6,2.9,3.6,1.3,versicolor
-4.8,3.4,1.6,0.2,setosa
-7.4,2.8,6.1,1.9,virginica"""
-
-    print("\n" + "=" * 60)
-    print("TEST 2: CLASSIFICATION CHARTS")
-    print("=" * 60)
-
-    result2 = preprocess(io.StringIO(clf_csv), target_column="species")
-    models2 = train_all_models(result2)
-    models2 = {k: v for k, v in models2.items() if v is not None}
-    metrics_df2 = compute_metrics(models2, result2)
-    rec2 = recommend(metrics_df2)
-
-    charts2 = generate_charts(result2, models2, metrics_df2, rec2["best_model"])
-    print(f"\nCharts generated: {len(charts2)}")
-    for name, b64 in charts2.items():
-        print(f"  {name:25s} -> {len(b64):,} chars (base64)")
-
-    # Save to outputs/classification/
-    out_dir2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs", "classification")
-    save_charts_to_disk(charts2, out_dir2)
-    print(f"\nSaved to: {os.path.abspath(out_dir2)}")
-
-    print("\n" + "=" * 60)
-    print("ALL TESTS PASSED")
-    print("=" * 60)
