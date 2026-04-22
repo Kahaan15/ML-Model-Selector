@@ -43,8 +43,6 @@ MAX_FEATURES = 20
 ALLOWED_EXTENSIONS = {".csv"}
 
 
-
-
 # ─────────────────────────────────────────────
 # ROUTES
 # ─────────────────────────────────────────────
@@ -167,8 +165,7 @@ def upload():
             task_type = None
 
         # ── Save to temp file (so preprocessor can open by path) ─────────────
-        tmp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp_uploads")
-        os.makedirs(tmp_dir, exist_ok=True)
+        tmp_dir = tempfile.gettempdir()
         suffix = os.path.splitext(file.filename)[1].lower() or ".csv"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=tmp_dir) as tmp_file:
             tmp_path = tmp_file.name
