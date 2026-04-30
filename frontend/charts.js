@@ -9,6 +9,7 @@
  */
 
 // ─── STATE ──────────────────────────────────────────────────────────────────
+// Tracks uploaded file and column metadata from the backend
 let uploadedFile = null;
 let columnData = null;
 let currentSortCol = null;
